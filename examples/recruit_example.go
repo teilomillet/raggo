@@ -2,15 +2,26 @@ package main
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/teilomillet/goal"
 	"github.com/teilomillet/raggo"
 )
+
+type ResumeCache struct {
+	Hash          string
+	Summary       string
+	Info          ResumeInfo
+	LastProcessed time.Time
+}
 
 // ResumeInfo represents structured information extracted from a resume
 type ResumeInfo struct {
@@ -42,8 +53,8 @@ func main() {
 	// Initialize raggo components
 	parser := raggo.NewParser()
 	chunker, err := raggo.NewChunker(
-		raggo.ChunkSize(500),
-		raggo.ChunkOverlap(50),
+		raggo.ChunkSize(512),
+		raggo.ChunkOverlap(64),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create chunker: %v", err)
@@ -109,78 +120,32 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 	}
 	log.Printf("Found %d resume files to process", len(files))
 
-	for _, file := range files {
-		log.Printf("Processing resume: %s", file)
-
-		// Parse the resume
-		doc, err := parser.Parse(file)
-		if err != nil {
-			log.Printf("Failed to parse resume %s: %v", file, err)
-			continue
-		}
-		log.Printf("Successfully parsed resume: %s", file)
-
-		// Step 1: Create a standardized summary
-		summarizePrompt := goal.NewPrompt(
-			"Summarize the given resume in the following standardized format:\n" +
-				"Personal Information: [Name, contact details]\n" +
-				"Professional Summary: [2-3 sentences summarizing key qualifications and career objectives]\n" +
-				"Skills: [List of key skills, separated by commas]\n" +
-				"Work Experience: [For each position: Job Title, Company, Dates, 1-2 key responsibilities or achievements]\n" +
-				"Education: [Degree, Institution, Year]\n" +
-				"Additional Information: [Any other relevant details like certifications, languages, etc.]\n" +
-				"Ensure that the summary is concise and captures the most important information from the resume.\n\n" +
-				"Resume Content:\n" + doc.Content,
-		)
-
-		standardizedSummary, err := llm.Generate(context.Background(), summarizePrompt)
-		if err != nil {
-			log.Printf("Failed to create standardized summary for resume %s: %v", file, err)
-			continue
-		}
-		log.Printf("Successfully created standardized summary for resume: %s", file)
-
-		// Step 2: Extract structured information from the standardized summary
-		resumeInfo, err := goal.ExtractStructuredData[ResumeInfo](context.Background(), llm, standardizedSummary)
-		if err != nil {
-			log.Printf("Failed to extract structured data from standardized summary %s: %v", file, err)
-			continue
-		}
-		log.Printf("Successfully extracted structured data from standardized summary: %s", file)
-
-		// Combine structured info and full summary
-		fullContent := fmt.Sprintf("Name: %s\nContact Details: %s\nProfessional Summary: %s\nSkills: %v\nWork Experience: %s\nEducation: %s\nAdditional Information: %s\n\nDetailed Summary:\n%s",
-			resumeInfo.Name,
-			resumeInfo.ContactDetails,
-			resumeInfo.ProfessionalSummary,
-			resumeInfo.Skills,
-			resumeInfo.WorkExperience,
-			resumeInfo.Education,
-			resumeInfo.AdditionalInfo,
-			standardizedSummary)
-
-		// Chunk the content
-		chunks := chunker.Chunk(fullContent)
-		log.Printf("Created %d chunks for resume: %s", len(chunks), file)
-
-		// Embed and save chunks
-		embeddedChunks, err := embeddingService.EmbedChunks(context.Background(), chunks)
-		if err != nil {
-			log.Printf("Failed to embed chunks for resume %s: %v", file, err)
-			continue
-		}
-		log.Printf("Successfully embedded %d chunks for resume: %s", len(embeddedChunks), file)
-
-		log.Printf("Saving embeddings for resume: %s", file)
-		err = vectorDB.SaveEmbeddings(context.Background(), "resumes", embeddedChunks)
-		if err != nil {
-			log.Printf("Failed to save embeddings for resume %s: %v", file, err)
-			continue
-		}
-		log.Printf("Successfully processed and saved resume: %s", file)
+	cacheDir := filepath.Join(resumeDir, ".cache")
+	err = os.MkdirAll(cacheDir, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	// Add a final check (if possible with your VectorDB implementation)
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 5) // Limit concurrency to 5 goroutines
+
+	for _, file := range files {
+		wg.Add(1)
+		go func(file string) {
+			defer wg.Done()
+			semaphore <- struct{}{}        // Acquire semaphore
+			defer func() { <-semaphore }() // Release semaphore
+
+			err := processResume(file, llm, parser, chunker, embeddingService, vectorDB, cacheDir)
+			if err != nil {
+				log.Printf("Error processing resume %s: %v", file, err)
+			}
+		}(file)
+	}
+
+	wg.Wait()
+
+	// Count total items in the collection
 	if counter, ok := vectorDB.(interface{ Count(string) (int, error) }); ok {
 		count, err := counter.Count("resumes")
 		if err != nil {
@@ -191,6 +156,151 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 	}
 
 	return nil
+}
+
+func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, cacheDir string) error {
+	log.Printf("Processing resume: %s", file)
+
+	// Check if the file has been modified since last processing
+	fileInfo, err := os.Stat(file)
+	if err != nil {
+		return fmt.Errorf("failed to get file info: %w", err)
+	}
+
+	cacheFile := filepath.Join(cacheDir, filepath.Base(file)+".cache")
+	var cache ResumeCache
+
+	cacheData, err := os.ReadFile(cacheFile)
+	if err == nil {
+		err = json.Unmarshal(cacheData, &cache)
+		if err == nil && cache.LastProcessed.After(fileInfo.ModTime()) {
+			log.Printf("Using cached data for resume: %s", file)
+			return nil
+		}
+	}
+
+	// Parse the resume
+	doc, err := parser.Parse(file)
+	if err != nil {
+		return fmt.Errorf("failed to parse resume: %w", err)
+	}
+
+	// Calculate hash of the document content
+	contentHash := fmt.Sprintf("%x", md5.Sum([]byte(doc.Content)))
+	if contentHash == cache.Hash {
+		log.Printf("Resume content unchanged, using cached data: %s", file)
+		return nil
+	}
+
+	// Process the resume
+	standardizedSummary, err := createStandardizedSummary(llm, doc.Content)
+	if err != nil {
+		return fmt.Errorf("failed to create standardized summary: %w", err)
+	}
+
+	resumeInfo, err := extractStructuredData(llm, standardizedSummary)
+	if err != nil {
+		return fmt.Errorf("failed to extract structured data: %w", err)
+	}
+
+	fullContent := combineResumeInfo(resumeInfo, standardizedSummary)
+	chunks := chunker.Chunk(fullContent)
+	embeddedChunks, err := embeddingService.EmbedChunks(context.Background(), chunks)
+	if err != nil {
+		return fmt.Errorf("failed to embed chunks: %w", err)
+	}
+
+	err = vectorDB.SaveEmbeddings(context.Background(), "resumes", embeddedChunks)
+	if err != nil {
+		return fmt.Errorf("failed to save embeddings: %w", err)
+	}
+
+	// Update cache
+	cache = ResumeCache{
+		Hash:          contentHash,
+		Summary:       standardizedSummary,
+		Info:          *resumeInfo,
+		LastProcessed: time.Now(),
+	}
+	cacheData, err = json.Marshal(cache)
+	if err != nil {
+		log.Printf("Failed to marshal cache data: %v", err)
+	} else {
+		err = os.WriteFile(cacheFile, cacheData, 0644)
+		if err != nil {
+			log.Printf("Failed to write cache file: %v", err)
+		}
+	}
+
+	log.Printf("Successfully processed and saved resume: %s", file)
+	return nil
+}
+
+func createStandardizedSummary(llm goal.LLM, content string) (string, error) {
+	summarizePrompt := goal.NewPrompt(
+		"Summarize the given resume in the following standardized format:\n" +
+			"Personal Information: [Name, contact details]\n" +
+			"Professional Summary: [2-3 sentences summarizing key qualifications and career objectives]\n" +
+			"Skills: [List of key skills, separated by commas]\n" +
+			"Work Experience: [For each position: Job Title, Company, Dates, 1-2 key responsibilities or achievements]\n" +
+			"Education: [Degree, Institution, Year]\n" +
+			"Additional Information: [Any other relevant details like certifications, languages, etc.]\n" +
+			"Ensure that the summary is concise and captures the most important information from the resume.\n\n" +
+			"Resume Content:\n" + content,
+	)
+
+	standardizedSummary, err := llm.Generate(context.Background(), summarizePrompt)
+	if err != nil {
+		return "", fmt.Errorf("failed to create standardized summary: %w", err)
+	}
+
+	return standardizedSummary, nil
+}
+
+func extractStructuredData(llm goal.LLM, standardizedSummary string) (*ResumeInfo, error) {
+	extractPrompt := goal.NewPrompt(fmt.Sprintf(`
+Extract the following information from the given resume summary:
+- Name
+- Contact Details
+- Professional Summary
+- Skills (as a list)
+- Work Experience
+- Education
+- Additional Information
+
+Resume Summary:
+%s
+
+Respond with a JSON object containing these fields.
+`, standardizedSummary))
+
+	resumeInfo, err := goal.ExtractStructuredData[ResumeInfo](context.Background(), llm, extractPrompt.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract structured data: %w", err)
+	}
+
+	return resumeInfo, nil
+}
+
+func combineResumeInfo(resumeInfo *ResumeInfo, standardizedSummary string) string {
+	return fmt.Sprintf(`Name: %s
+Contact Details: %s
+Professional Summary: %s
+Skills: %s
+Work Experience: %s
+Education: %s
+Additional Information: %s
+
+Detailed Summary:
+%s`,
+		resumeInfo.Name,
+		resumeInfo.ContactDetails,
+		resumeInfo.ProfessionalSummary,
+		strings.Join(resumeInfo.Skills, ", "),
+		resumeInfo.WorkExperience,
+		resumeInfo.Education,
+		resumeInfo.AdditionalInfo,
+		standardizedSummary)
 }
 
 func getCollectionItemCount(vectorDB raggo.VectorDB, collectionName string) (int, error) {
