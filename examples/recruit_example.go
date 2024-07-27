@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -161,48 +160,58 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, cacheDir string) error {
 	log.Printf("Processing resume: %s", file)
 
-	// Check if the file has been modified since last processing
-	fileInfo, err := os.Stat(file)
-	if err != nil {
-		return fmt.Errorf("failed to get file info: %w", err)
-	}
-
 	cacheFile := filepath.Join(cacheDir, filepath.Base(file)+".cache")
 	var cache ResumeCache
 
 	cacheData, err := os.ReadFile(cacheFile)
 	if err == nil {
 		err = json.Unmarshal(cacheData, &cache)
-		if err == nil && cache.LastProcessed.After(fileInfo.ModTime()) {
-			log.Printf("Using cached data for resume: %s", file)
-			return nil
+		if err != nil {
+			log.Printf("Failed to unmarshal cache data: %v", err)
 		}
 	}
 
-	// Parse the resume
-	doc, err := parser.Parse(file)
-	if err != nil {
-		return fmt.Errorf("failed to parse resume: %w", err)
+	var standardizedSummary string
+	var resumeInfo *ResumeInfo
+
+	if cache.Summary != "" && cache.Info.Name != "" {
+		log.Printf("Using cached summary and info for resume: %s", file)
+		standardizedSummary = cache.Summary
+		resumeInfo = &cache.Info
+	} else {
+		// Parse the resume and create summary if not in cache
+		doc, err := parser.Parse(file)
+		if err != nil {
+			return fmt.Errorf("failed to parse resume: %w", err)
+		}
+
+		standardizedSummary, err = createStandardizedSummary(llm, doc.Content)
+		if err != nil {
+			return fmt.Errorf("failed to create standardized summary: %w", err)
+		}
+
+		resumeInfo, err = extractStructuredData(llm, standardizedSummary)
+		if err != nil {
+			return fmt.Errorf("failed to extract structured data: %w", err)
+		}
+
+		// Update cache
+		cache.Summary = standardizedSummary
+		cache.Info = *resumeInfo
+		cache.LastProcessed = time.Now()
+
+		cacheData, err = json.Marshal(cache)
+		if err != nil {
+			log.Printf("Failed to marshal cache data: %v", err)
+		} else {
+			err = os.WriteFile(cacheFile, cacheData, 0644)
+			if err != nil {
+				log.Printf("Failed to write cache file: %v", err)
+			}
+		}
 	}
 
-	// Calculate hash of the document content
-	contentHash := fmt.Sprintf("%x", md5.Sum([]byte(doc.Content)))
-	if contentHash == cache.Hash {
-		log.Printf("Resume content unchanged, using cached data: %s", file)
-		return nil
-	}
-
-	// Process the resume
-	standardizedSummary, err := createStandardizedSummary(llm, doc.Content)
-	if err != nil {
-		return fmt.Errorf("failed to create standardized summary: %w", err)
-	}
-
-	resumeInfo, err := extractStructuredData(llm, standardizedSummary)
-	if err != nil {
-		return fmt.Errorf("failed to extract structured data: %w", err)
-	}
-
+	// Always generate and save embeddings
 	fullContent := combineResumeInfo(resumeInfo, standardizedSummary)
 	chunks := chunker.Chunk(fullContent)
 	embeddedChunks, err := embeddingService.EmbedChunks(context.Background(), chunks)
@@ -210,32 +219,16 @@ func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo
 		return fmt.Errorf("failed to embed chunks: %w", err)
 	}
 
+	log.Printf("Saving embeddings for resume: %s", file)
 	err = vectorDB.SaveEmbeddings(context.Background(), "resumes", embeddedChunks)
 	if err != nil {
 		return fmt.Errorf("failed to save embeddings: %w", err)
 	}
-
-	// Update cache
-	cache = ResumeCache{
-		Hash:          contentHash,
-		Summary:       standardizedSummary,
-		Info:          *resumeInfo,
-		LastProcessed: time.Now(),
-	}
-	cacheData, err = json.Marshal(cache)
-	if err != nil {
-		log.Printf("Failed to marshal cache data: %v", err)
-	} else {
-		err = os.WriteFile(cacheFile, cacheData, 0644)
-		if err != nil {
-			log.Printf("Failed to write cache file: %v", err)
-		}
-	}
+	log.Printf("Embeddings saved successfully for resume: %s", file)
 
 	log.Printf("Successfully processed and saved resume: %s", file)
 	return nil
 }
-
 func createStandardizedSummary(llm goal.LLM, content string) (string, error) {
 	summarizePrompt := goal.NewPrompt(
 		"Summarize the given resume in the following standardized format:\n" +
