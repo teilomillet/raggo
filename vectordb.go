@@ -11,68 +11,104 @@ import (
 type VectorDB interface {
 	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
 	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
+	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error)
 	Close() error
-}
-
-// VectorDBOption is a function type for configuring VectorDB
-type VectorDBOption = rag.VectorDBOption
-
-// SetType sets the type of vector database
-func SetType(dbType string) VectorDBOption {
-	return rag.SetVectorDBType(dbType)
-}
-
-// SetAddress sets the address for the vector database
-func SetAddress(address string) VectorDBOption {
-	return rag.SetVectorDBAddress(address)
-}
-
-// SetDimension sets the dimension for the vector database
-func SetDimension(dimension int) VectorDBOption {
-	return rag.SetVectorDBDimension(dimension)
-}
-
-// SetOption sets a custom option for the vector database
-func SetVectorDBOption(key string, value interface{}) VectorDBOption {
-	return rag.SetVectorDBOption(key, value)
-}
-
-// SetMetric sets the metric type for vector similarity calculation
-func SetMetric(metric string) VectorDBOption {
-	return rag.SetVectorDBOption("metric", metric)
-}
-
-// SetIndexType sets the index type for Milvus
-func SetIndexType(indexType string) VectorDBOption {
-	return rag.SetVectorDBOption("index_type", indexType)
-}
-
-// SetIndexParams sets the index parameters for Milvus
-func SetIndexParams(params map[string]interface{}) VectorDBOption {
-	return rag.SetVectorDBOption("index_params", params)
-}
-
-// SetSearchParams sets the search parameters for Milvus
-func SetSearchParams(params map[string]interface{}) VectorDBOption {
-	return rag.SetVectorDBOption("search_params", params)
-}
-
-// NewVectorDB creates a new VectorDB instance based on the provided configuration
-func NewVectorDB(opts ...VectorDBOption) (VectorDB, error) {
-	return rag.NewVectorDB(opts...)
 }
 
 // SearchParam interface for search-related parameters
 type SearchParam = rag.SearchParam
 
-// DefaultSearchParam provides a basic implementation of SearchParam
-type DefaultSearchParam = rag.DefaultSearchParam
+// SearchResult represents a single search result
+type SearchResult = rag.SearchResult
 
 // NewDefaultSearchParam creates a new DefaultSearchParam
-func NewDefaultSearchParam() *DefaultSearchParam {
+func NewDefaultSearchParam() SearchParam {
 	return rag.NewDefaultSearchParam()
 }
 
-// SearchResult represents a single search result
-type SearchResult = rag.SearchResult
+// VectorDBConfig holds the configuration for creating a VectorDB
+type VectorDBConfig struct {
+	Type      string
+	Address   string
+	Dimension int
+	Options   map[string]interface{}
+}
+
+// VectorDBOption is a function type for configuring VectorDBConfig
+type VectorDBOption func(*VectorDBConfig)
+
+// SetVectorDBType sets the type of vector database
+func SetVectorDBType(dbType string) VectorDBOption {
+	return func(c *VectorDBConfig) {
+		c.Type = dbType
+	}
+}
+
+// SetVectorDBAddress sets the address for the vector database
+func SetVectorDBAddress(address string) VectorDBOption {
+	return func(c *VectorDBConfig) {
+		c.Address = address
+	}
+}
+
+// SetVectorDBDimension sets the dimension for the vector database
+func SetVectorDBDimension(dimension int) VectorDBOption {
+	return func(c *VectorDBConfig) {
+		c.Dimension = dimension
+	}
+}
+
+// SetVectorDBOption sets a custom option for the vector database
+func SetVectorDBOption(key string, value interface{}) VectorDBOption {
+	return func(c *VectorDBConfig) {
+		if c.Options == nil {
+			c.Options = make(map[string]interface{})
+		}
+		c.Options[key] = value
+	}
+}
+
+// NewVectorDB creates a new VectorDB instance based on the provided configuration
+func NewVectorDB(opts ...VectorDBOption) (VectorDB, error) {
+	config := &VectorDBConfig{
+		Dimension: 1536, // Default dimension
+		Options:   make(map[string]interface{}),
+	}
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	internalDB, err := rag.NewVectorDB(rag.VectorDBConfig{
+		Type:      config.Type,
+		Address:   config.Address,
+		Dimension: config.Dimension,
+		Options:   config.Options,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &vectorDBWrapper{internalDB}, nil
+}
+
+// vectorDBWrapper wraps the internal VectorDB to match the public interface
+type vectorDBWrapper struct {
+	internal rag.VectorDB
+}
+
+func (w *vectorDBWrapper) SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error {
+	return w.internal.SaveEmbeddings(ctx, collectionName, chunks)
+}
+
+func (w *vectorDBWrapper) Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error) {
+	return w.internal.Search(ctx, collectionName, query, limit, param)
+}
+
+func (w *vectorDBWrapper) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error) {
+	return w.internal.HybridSearch(ctx, collectionName, queries, limit, param)
+}
+
+func (w *vectorDBWrapper) Close() error {
+	return w.internal.Close()
+}
 

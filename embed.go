@@ -2,14 +2,23 @@ package raggo
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/teilomillet/raggo/internal/rag"
 	"github.com/teilomillet/raggo/internal/rag/providers"
 )
 
-// EmbeddedChunk represents a chunk of text with its embedding and metadata
+// EmbeddedChunk represents a chunk of text with its embeddings and metadata
 type EmbeddedChunk = rag.EmbeddedChunk
 
+// EmbeddedChunk represents a chunk of text with its embeddings and metadata
+//
+//	type EmbeddedChunk struct {
+//		Text       string
+//		Embeddings map[string][]float64
+//		Metadata   map[string]interface{}
+//	}
+//
 // EmbedderOption is a function type for configuring the Embedder
 type EmbedderOption = rag.EmbedderOption
 
@@ -43,15 +52,38 @@ func NewEmbedder(opts ...EmbedderOption) (Embedder, error) {
 
 // EmbeddingService handles the embedding process
 type EmbeddingService struct {
-	service *rag.EmbeddingService
+	embedders map[string]Embedder
 }
 
 // NewEmbeddingService creates a new embedding service
 func NewEmbeddingService(embedder Embedder) *EmbeddingService {
-	return &EmbeddingService{service: rag.NewEmbeddingService(embedder)}
+	return &EmbeddingService{
+		embedders: map[string]Embedder{"default": embedder},
+	}
 }
 
 // EmbedChunks embeds a slice of chunks
-func (s *EmbeddingService) EmbedChunks(ctx context.Context, chunks []Chunk) ([]EmbeddedChunk, error) {
-	return s.service.EmbedChunks(ctx, chunks)
+func (s *EmbeddingService) EmbedChunks(ctx context.Context, chunks []rag.Chunk) ([]rag.EmbeddedChunk, error) {
+	embeddedChunks := make([]rag.EmbeddedChunk, 0, len(chunks))
+	for _, chunk := range chunks {
+		embeddings := make(map[string][]float64)
+		for field, embedder := range s.embedders {
+			embedding, err := embedder.Embed(ctx, chunk.Text)
+			if err != nil {
+				return nil, fmt.Errorf("error embedding chunk for field %s: %w", field, err)
+			}
+			embeddings[field] = embedding
+		}
+		embeddedChunk := rag.EmbeddedChunk{
+			Text:       chunk.Text,
+			Embeddings: embeddings,
+			Metadata: map[string]interface{}{
+				"token_size":     chunk.TokenSize,
+				"start_sentence": chunk.StartSentence,
+				"end_sentence":   chunk.EndSentence,
+			},
+		}
+		embeddedChunks = append(embeddedChunks, embeddedChunk)
+	}
+	return embeddedChunks, nil
 }

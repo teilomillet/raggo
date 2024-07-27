@@ -71,8 +71,8 @@ func main() {
 	embeddingService := raggo.NewEmbeddingService(embedder)
 
 	vectorDB, err := raggo.NewVectorDB(
-		raggo.SetType("memory"),
-		raggo.SetDimension(1536),
+		raggo.SetVectorDBType("memory"),
+		raggo.SetVectorDBDimension(1536),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create vector database: %v", err)
@@ -95,18 +95,26 @@ func main() {
 		log.Fatalf("Failed to process resumes: %v", err)
 	}
 
-	// Search for candidates based on a job offer
+	// Job offer
 	jobOffer := "We are looking for a software engineer with 5+ years of experience in Go, distributed systems, and cloud technologies. The ideal candidate should have strong problem-solving skills and experience with Docker and Kubernetes."
 
+	// Perform normal vector search
+	fmt.Println("\nPerforming normal vector search:")
 	candidates, err := searchCandidates(context.Background(), llm, embeddingService, vectorDB, jobOffer)
 	if err != nil {
 		log.Fatalf("Failed to search candidates: %v", err)
 	}
 
-	fmt.Println("Top candidates for the job offer:")
-	for i, candidate := range candidates {
-		fmt.Printf("%d. %s (Score: %.4f)\n", i+1, candidate.Text, candidate.Score)
+	printCandidates(candidates)
+
+	// Perform hybrid search
+	fmt.Println("\nPerforming hybrid search:")
+	hybridCandidates, err := hybridSearchCandidates(context.Background(), llm, embeddingService, vectorDB, jobOffer)
+	if err != nil {
+		log.Fatalf("Failed to perform hybrid search for candidates: %v", err)
 	}
+
+	printCandidates(hybridCandidates)
 }
 
 func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, resumeDir string) error {
@@ -328,10 +336,65 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 	}
 
 	// Search for matching candidates
-	results, err := vectorDB.Search(ctx, "resumes", jobEmbeddings[0].Embedding, 5, raggo.NewDefaultSearchParam())
+	results, err := vectorDB.Search(ctx, "resumes", jobEmbeddings[0].Embeddings["default"], 5, raggo.NewDefaultSearchParam())
 	if err != nil {
 		return nil, fmt.Errorf("failed to search for candidates: %w", err)
 	}
 
 	return results, nil
+}
+
+func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+	// Summarize the job offer
+	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to summarize job offer: %w", err)
+	}
+
+	// Create a single chunk for the job summary
+	jobChunk := raggo.Chunk{
+		Text:          jobSummary,
+		TokenSize:     len(strings.Split(jobSummary, " ")), // Simple word count as a proxy for token size
+		StartSentence: 0,
+		EndSentence:   1,
+	}
+
+	// Embed the job summary
+	jobEmbeddings, err := embeddingService.EmbedChunks(ctx, []raggo.Chunk{jobChunk})
+	if err != nil {
+		return nil, fmt.Errorf("failed to embed job summary: %w", err)
+	}
+
+	if len(jobEmbeddings) == 0 {
+		return nil, fmt.Errorf("no embeddings generated for job summary")
+	}
+
+	// Prepare queries for hybrid search
+	queries := make(map[string][]float64)
+	for field, embedding := range jobEmbeddings[0].Embeddings {
+		queries[field] = embedding
+	}
+
+	// Perform hybrid search
+	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, 5, raggo.NewDefaultSearchParam())
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform hybrid search for candidates: %w", err)
+	}
+
+	return results, nil
+}
+
+func printCandidates(candidates []raggo.SearchResult) {
+	fmt.Println("Top candidates for the job offer:")
+	for i, candidate := range candidates {
+		fmt.Printf("%d. Score: %.4f\n", i+1, candidate.Score)
+		fmt.Printf("   Text: %s\n\n", truncateString(candidate.Text, 200))
+	}
+}
+
+func truncateString(s string, maxLength int) string {
+	if len(s) <= maxLength {
+		return s
+	}
+	return s[:maxLength] + "..."
 }

@@ -71,8 +71,8 @@ func main() {
 
 	// Create VectorDB instances for memory, Milvus with L2, and Milvus with IP
 	memoryDB, err := raggo.NewVectorDB(
-		raggo.SetType("memory"),
-		raggo.SetDimension(1536),
+		raggo.SetVectorDBType("memory"),
+		raggo.SetVectorDBDimension(1536),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create memory vector database: %v", err)
@@ -80,15 +80,16 @@ func main() {
 	defer memoryDB.Close()
 
 	milvusDBL2, err := raggo.NewVectorDB(
-		raggo.SetType("milvus"),
-		raggo.SetAddress("localhost:19530"),
-		raggo.SetDimension(1536),
-		raggo.SetMetric("l2"),
-		raggo.SetIndexType("IVF_FLAT"),
-		raggo.SetIndexParams(map[string]interface{}{
+		raggo.SetVectorDBType("milvus"),
+		raggo.SetVectorDBAddress("localhost:19530"),
+		raggo.SetVectorDBDimension(1536),
+		raggo.SetVectorDBOption("metric", "L2"),
+		raggo.SetVectorDBOption("index_type", "IVF_FLAT"),
+		raggo.SetVectorDBOption("default_vector_field", "embedding"), // Add this line
+		raggo.SetVectorDBOption("index_params", map[string]interface{}{
 			"nlist": 1024,
 		}),
-		raggo.SetSearchParams(map[string]interface{}{
+		raggo.SetVectorDBOption("search_params", map[string]interface{}{
 			"nprobe": 16,
 		}),
 	)
@@ -98,15 +99,15 @@ func main() {
 	defer milvusDBL2.Close()
 
 	milvusDBIP, err := raggo.NewVectorDB(
-		raggo.SetType("milvus"),
-		raggo.SetAddress("localhost:19530"),
-		raggo.SetDimension(1536),
-		raggo.SetMetric("ip"),
-		raggo.SetIndexType("IVF_FLAT"),
-		raggo.SetIndexParams(map[string]interface{}{
+		raggo.SetVectorDBType("milvus"),
+		raggo.SetVectorDBAddress("localhost:19530"),
+		raggo.SetVectorDBDimension(1536),
+		raggo.SetVectorDBOption("metric", "IP"),
+		raggo.SetVectorDBOption("index_type", "IVF_FLAT"),
+		raggo.SetVectorDBOption("index_params", map[string]interface{}{
 			"nlist": 1024,
 		}),
-		raggo.SetSearchParams(map[string]interface{}{
+		raggo.SetVectorDBOption("search_params", map[string]interface{}{
 			"nprobe": 16,
 		}),
 	)
@@ -114,7 +115,6 @@ func main() {
 		log.Fatalf("Failed to create Milvus IP vector database: %v", err)
 	}
 	defer milvusDBIP.Close()
-
 	// Save embeddings to all databases
 	collectionName := "test_collection"
 	err = memoryDB.SaveEmbeddings(context.Background(), collectionName, embeddedChunks)
@@ -133,7 +133,7 @@ func main() {
 	}
 
 	// Perform a search using all databases
-	query := embeddedChunks[0].Embedding // Use the first chunk as a query
+	query := embeddedChunks[0].Embeddings["default"] // Use the default embedding
 	limit := 5
 	searchParam := raggo.NewDefaultSearchParam()
 
@@ -166,6 +166,7 @@ func main() {
 }
 
 func compareResults(memoryResults, milvusL2Results, milvusIPResults []raggo.SearchResult) {
+
 	fmt.Println("\nComparing Memory, Milvus L2, and Milvus IP results:")
 	for i := 0; i < len(memoryResults) && i < len(milvusL2Results) && i < len(milvusIPResults); i++ {
 		memoryResult := memoryResults[i]

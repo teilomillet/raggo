@@ -16,14 +16,16 @@ import (
 )
 
 type MilvusDB struct {
-	client       client.Client
-	address      string
-	dimension    int
-	loaded       map[string]bool
-	indexType    string
-	indexParams  map[string]interface{}
-	searchParams map[string]interface{}
-	metric       entity.MetricType // New field for metric
+	client             client.Client
+	address            string
+	dimension          int
+	loaded             map[string]bool
+	indexType          string
+	indexParams        map[string]interface{}
+	searchParams       map[string]interface{}
+	metric             entity.MetricType
+	vectorFields       []string
+	defaultVectorField string
 }
 
 func NewMilvusDB(config rag.VectorDBConfig) (rag.VectorDB, error) {
@@ -72,19 +74,29 @@ func NewMilvusDB(config rag.VectorDBConfig) (rag.VectorDB, error) {
 			return nil, fmt.Errorf("unsupported metric: %s", metricStr)
 		}
 	}
+	defaultVectorField := "embedding"
+	if dvf, ok := config.Options["default_vector_field"].(string); ok && dvf != "" {
+		defaultVectorField = dvf
+	}
+
+	vectorFields := []string{defaultVectorField}
+	if vf, ok := config.Options["vector_fields"].([]string); ok && len(vf) > 0 {
+		vectorFields = vf
+	}
 
 	return &MilvusDB{
-		client:       c,
-		address:      config.Address,
-		dimension:    config.Dimension,
-		loaded:       make(map[string]bool),
-		indexType:    indexType,
-		indexParams:  indexParams,
-		searchParams: searchParams,
-		metric:       metric,
+		client:             c,
+		address:            config.Address,
+		dimension:          config.Dimension,
+		loaded:             make(map[string]bool),
+		indexType:          indexType,
+		indexParams:        indexParams,
+		searchParams:       searchParams,
+		metric:             metric,
+		vectorFields:       vectorFields,
+		defaultVectorField: defaultVectorField,
 	}, nil
 }
-
 func normalizeVector[T float32 | float64](vector []T) []T {
 	var sum T
 	for _, v := range vector {
@@ -215,8 +227,13 @@ func (m *MilvusDB) createCollectionIfNotExists(ctx context.Context, collectionNa
 		schema := entity.NewSchema().
 			WithName(collectionName).
 			WithDescription("Collection for storing text embeddings").
-			WithField(entity.NewField().WithName("id").WithDataType(entity.FieldTypeInt64).WithIsPrimaryKey(true)).
-			WithField(entity.NewField().WithName("embedding").WithDataType(entity.FieldTypeFloatVector).WithDim(int64(m.dimension))).
+			WithField(entity.NewField().WithName("id").WithDataType(entity.FieldTypeInt64).WithIsPrimaryKey(true))
+
+		for _, field := range m.vectorFields {
+			schema = schema.WithField(entity.NewField().WithName(field).WithDataType(entity.FieldTypeFloatVector).WithDim(int64(m.dimension)))
+		}
+
+		schema = schema.
 			WithField(entity.NewField().WithName("text").WithDataType(entity.FieldTypeVarChar).WithMaxLength(65535)).
 			WithField(entity.NewField().WithName("token_size").WithDataType(entity.FieldTypeInt32)).
 			WithField(entity.NewField().WithName("start_sentence").WithDataType(entity.FieldTypeInt32)).
@@ -231,7 +248,6 @@ func (m *MilvusDB) createCollectionIfNotExists(ctx context.Context, collectionNa
 
 	return nil
 }
-
 func (m *MilvusDB) indexExists(ctx context.Context, collectionName, fieldName string) (bool, error) {
 	indexes, err := m.client.DescribeIndex(ctx, collectionName, fieldName)
 	if err != nil {
@@ -261,18 +277,21 @@ func (m *MilvusDB) createIndex(ctx context.Context, collectionName string) error
 		return fmt.Errorf("failed to create index object: %w", err)
 	}
 
-	err = m.client.CreateIndex(ctx, collectionName, "embedding", idx, false)
-	if err != nil {
-		if strings.Contains(err.Error(), "index already exist") {
-			rag.GlobalLogger.Debug("Index already exists", "collectionName", collectionName)
-			return nil
+	for _, field := range m.vectorFields {
+		err = m.client.CreateIndex(ctx, collectionName, field, idx, false)
+		if err != nil {
+			if strings.Contains(err.Error(), "index already exist") {
+				rag.GlobalLogger.Debug("Index already exists", "collectionName", collectionName, "field", field)
+				continue
+			}
+			return fmt.Errorf("failed to create index in Milvus for field %s: %w", field, err)
 		}
-		return fmt.Errorf("failed to create index in Milvus: %w", err)
+		rag.GlobalLogger.Debug("Index creation completed", "collectionName", collectionName, "field", field)
 	}
 
-	rag.GlobalLogger.Debug("Index creation completed", "collectionName", collectionName)
 	return nil
 }
+
 func (m *MilvusDB) createIndexWithRetry(ctx context.Context, collectionName string, maxRetries int) error {
 	var err error
 	for i := 0; i < maxRetries; i++ {
@@ -304,12 +323,7 @@ func (m *MilvusDB) SaveEmbeddings(ctx context.Context, collectionName string, ch
 		return fmt.Errorf("no chunks to save")
 	}
 
-	if len(chunks[0].Embedding) != m.dimension {
-		return fmt.Errorf("embedding dimension mismatch: expected %d, got %d", m.dimension, len(chunks[0].Embedding))
-	}
-
 	// Step 1: Ensure collection exists
-	rag.GlobalLogger.Debug("Ensuring collection exists", "collectionName", collectionName)
 	err := m.createCollectionIfNotExists(ctx, collectionName)
 	if err != nil {
 		return fmt.Errorf("failed to create collection: %w", err)
@@ -318,33 +332,52 @@ func (m *MilvusDB) SaveEmbeddings(ctx context.Context, collectionName string, ch
 	// Step 2: Insert data
 	rag.GlobalLogger.Debug("Inserting data into collection", "collectionName", collectionName, "chunkCount", len(chunks))
 	ids := make([]int64, len(chunks))
-	embeddings := make([][]float32, len(chunks))
 	texts := make([]string, len(chunks))
 	tokenSizes := make([]int32, len(chunks))
 	startSentences := make([]int32, len(chunks))
 	endSentences := make([]int32, len(chunks))
 
+	embeddings := make(map[string][][]float32)
+	for _, field := range m.vectorFields {
+		embeddings[field] = make([][]float32, len(chunks))
+	}
+
 	for i, chunk := range chunks {
 		ids[i] = int64(i)
-		embeddings[i] = toFloat32Slice(normalizeVector(chunk.Embedding))
 		texts[i] = chunk.Text
 		tokenSizes[i] = int32(chunk.Metadata["token_size"].(int))
 		startSentences[i] = int32(chunk.Metadata["start_sentence"].(int))
 		endSentences[i] = int32(chunk.Metadata["end_sentence"].(int))
-	}
 
-	_, err = m.client.Insert(ctx, collectionName, "",
+		for field, vector := range chunk.Embeddings {
+			targetField := field
+			if field == "default" {
+				targetField = m.defaultVectorField
+			}
+			if _, ok := embeddings[targetField]; !ok {
+				embeddings[targetField] = make([][]float32, len(chunks))
+			}
+			embeddings[targetField][i] = toFloat32Slice(normalizeVector(vector))
+		}
+	}
+	columns := []entity.Column{
 		entity.NewColumnInt64("id", ids),
-		entity.NewColumnFloatVector("embedding", m.dimension, embeddings),
 		entity.NewColumnVarChar("text", texts),
 		entity.NewColumnInt32("token_size", tokenSizes),
 		entity.NewColumnInt32("start_sentence", startSentences),
 		entity.NewColumnInt32("end_sentence", endSentences),
-	)
+	}
+
+	for field, vectors := range embeddings {
+		if len(vectors) > 0 {
+			columns = append(columns, entity.NewColumnFloatVector(field, m.dimension, vectors))
+		}
+	}
+
+	_, err = m.client.Insert(ctx, collectionName, "", columns...)
 	if err != nil {
 		return fmt.Errorf("failed to insert chunks: %w", err)
 	}
-
 	// Step 3: Flush the collection
 	rag.GlobalLogger.Debug("Flushing collection", "collectionName", collectionName)
 	err = m.client.Flush(ctx, collectionName, false)
@@ -478,6 +511,64 @@ func (m *MilvusDB) fallbackSearch(ctx context.Context, collectionName string, qu
 	rag.GlobalLogger.Debug("Fallback search completed", "resultCount", len(results))
 	return results, nil
 }
+
+func (m *MilvusDB) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param rag.SearchParam) ([]rag.SearchResult, error) {
+	rag.GlobalLogger.Debug("Performing hybrid search in MilvusDB", "collectionName", collectionName, "limit", limit)
+
+	err := m.ensureCollectionLoaded(ctx, collectionName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load collection: %w", err)
+	}
+
+	searchParams := m.searchParams
+	if param != nil {
+		for k, v := range param.Params() {
+			searchParams[k] = v
+		}
+	}
+
+	var sp entity.SearchParam
+	switch m.indexType {
+	case "IVF_FLAT":
+		sp, err = entity.NewIndexIvfFlatSearchParam(searchParams["nprobe"].(int))
+	case "HNSW":
+		sp, err = entity.NewIndexHNSWSearchParam(searchParams["ef"].(int))
+	default:
+		return nil, fmt.Errorf("unsupported index type: %s", m.indexType)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create search param: %w", err)
+	}
+
+	searchRequests := make([]*client.ANNSearchRequest, 0, len(queries))
+	for field, query := range queries {
+		vector := toFloat32Slice(normalizeVector(query))
+		searchRequests = append(searchRequests, client.NewANNSearchRequest(field, m.metric, "", []entity.Vector{entity.FloatVector(vector)}, sp, limit))
+	}
+
+	searchResults, err := m.client.HybridSearch(
+		ctx,
+		collectionName,
+		[]string{}, // partitionNames (empty slice if searching all partitions)
+		limit,
+		[]string{"id", "text", "token_size", "start_sentence", "end_sentence"},
+		client.NewRRFReranker(),
+		searchRequests,
+		// Add any additional client.SearchQueryOptionFunc if needed
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform hybrid search: %w", err)
+	}
+
+	results, err := m.processResults(searchResults, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process search results: %w", err)
+	}
+
+	return results, nil
+}
+
 func (m *MilvusDB) getAllVectors(ctx context.Context, collectionName string) (map[int64][]float64, error) {
 	rag.GlobalLogger.Debug("Fetching all vectors from collection", "collectionName", collectionName)
 
@@ -639,4 +730,3 @@ func min(a, b int) int {
 func init() {
 	rag.RegisterVectorDB("milvus", NewMilvusDB)
 }
-

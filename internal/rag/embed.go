@@ -65,34 +65,38 @@ func NewEmbedder(opts ...EmbedderOption) (providers.Embedder, error) {
 	return factory(config.Options)
 }
 
-// EmbeddedChunk represents a chunk of text with its embedding and metadata
+// EmbeddedChunk represents a chunk of text with its embeddings and metadata
 type EmbeddedChunk struct {
-	Text      string                 `json:"text"`
-	Embedding []float64              `json:"embedding"`
-	Metadata  map[string]interface{} `json:"metadata"`
+	Text       string                 `json:"text"`
+	Embeddings map[string][]float64   `json:"embeddings"`
+	Metadata   map[string]interface{} `json:"metadata"`
 }
 
 // EmbeddingService handles the embedding process
 type EmbeddingService struct {
-	embedder providers.Embedder
+	embedders map[string]providers.Embedder
 }
 
 // NewEmbeddingService creates a new embedding service
-func NewEmbeddingService(embedder providers.Embedder) *EmbeddingService {
-	return &EmbeddingService{embedder: embedder}
+func NewEmbeddingService(embedders map[string]providers.Embedder) *EmbeddingService {
+	return &EmbeddingService{embedders: embedders}
 }
 
 // EmbedChunks embeds a slice of chunks
 func (s *EmbeddingService) EmbedChunks(ctx context.Context, chunks []Chunk) ([]EmbeddedChunk, error) {
 	embeddedChunks := make([]EmbeddedChunk, 0, len(chunks))
 	for _, chunk := range chunks {
-		embedding, err := s.embedder.Embed(ctx, chunk.Text)
-		if err != nil {
-			return nil, fmt.Errorf("error embedding chunk: %w", err)
+		embeddings := make(map[string][]float64)
+		for field, embedder := range s.embedders {
+			embedding, err := embedder.Embed(ctx, chunk.Text)
+			if err != nil {
+				return nil, fmt.Errorf("error embedding chunk for field %s: %w", field, err)
+			}
+			embeddings[field] = embedding
 		}
 		embeddedChunk := EmbeddedChunk{
-			Text:      chunk.Text,
-			Embedding: embedding,
+			Text:       chunk.Text,
+			Embeddings: embeddings,
 			Metadata: map[string]interface{}{
 				"token_size":     chunk.TokenSize,
 				"start_sentence": chunk.StartSentence,

@@ -9,6 +9,7 @@ import (
 type VectorDB interface {
 	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
 	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
+	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error)
 	Close() error
 }
 
@@ -18,40 +19,6 @@ type VectorDBConfig struct {
 	Address   string
 	Dimension int
 	Options   map[string]interface{}
-}
-
-// VectorDBOption is a function type for configuring VectorDBConfig
-type VectorDBOption func(*VectorDBConfig)
-
-// SetVectorDBType sets the type of vector database
-func SetVectorDBType(dbType string) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		c.Type = dbType
-	}
-}
-
-// SetVectorDBAddress sets the address for the vector database
-func SetVectorDBAddress(address string) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		c.Address = address
-	}
-}
-
-// SetVectorDBDimension sets the dimension for the vector database
-func SetVectorDBDimension(dimension int) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		c.Dimension = dimension
-	}
-}
-
-// SetVectorDBOption sets a custom option for the vector database
-func SetVectorDBOption(key string, value interface{}) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		if c.Options == nil {
-			c.Options = make(map[string]interface{})
-		}
-		c.Options[key] = value
-	}
 }
 
 // VectorDBFactory is a function type for creating VectorDB instances
@@ -65,15 +32,7 @@ func RegisterVectorDB(name string, factory VectorDBFactory) {
 }
 
 // NewVectorDB creates a new VectorDB instance based on the provided configuration
-func NewVectorDB(opts ...VectorDBOption) (VectorDB, error) {
-	config := &VectorDBConfig{
-		Dimension: 1536, // Default dimension
-		Options:   make(map[string]interface{}),
-	}
-	for _, opt := range opts {
-		opt(config)
-	}
-
+func NewVectorDB(config VectorDBConfig) (VectorDB, error) {
 	if config.Type == "" {
 		return nil, fmt.Errorf("vector database type must be specified")
 	}
@@ -83,7 +42,7 @@ func NewVectorDB(opts ...VectorDBOption) (VectorDB, error) {
 		return nil, fmt.Errorf("unsupported vector database type: %s", config.Type)
 	}
 
-	return factory(*config)
+	return factory(config)
 }
 
 // SearchParam interface for search-related parameters
@@ -116,4 +75,14 @@ type SearchResult struct {
 	Score    float64
 	Text     string
 	Metadata map[string]interface{}
+}
+
+// VectorDBError represents an error that occurred during a vector database operation
+type VectorDBError struct {
+	Op  string
+	Err error
+}
+
+func (e *VectorDBError) Error() string {
+	return fmt.Sprintf("vectordb operation %s failed: %v", e.Op, e.Err)
 }
