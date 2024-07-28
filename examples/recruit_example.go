@@ -270,6 +270,24 @@ func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo
 	return nil
 }
 
+func deduplicateResults(results []raggo.SearchResult) []raggo.SearchResult {
+	seen := make(map[string]bool)
+	deduplicated := []raggo.SearchResult{}
+
+	for _, result := range results {
+		name, ok := result.Fields["name"].(string)
+		if !ok {
+			continue
+		}
+		if !seen[name] {
+			seen[name] = true
+			deduplicated = append(deduplicated, result)
+		}
+	}
+
+	return deduplicated
+}
+
 func createStandardizedSummary(llm goal.LLM, content string) (string, error) {
 	summarizePrompt := goal.NewPrompt(
 		"Summarize the given resume in the following standardized format:\n" +
@@ -411,13 +429,21 @@ func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService 
 	// Define the fields we want to retrieve
 	fields := []string{"name", "skills", "professional_summary", "work_experience"}
 
-	// Perform hybrid search
-	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, fields, 5, raggo.NewDefaultSearchParam())
+	// Perform hybrid search with an increased limit
+	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, fields, 10, raggo.NewDefaultSearchParam()) // Increased limit to 10
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform hybrid search for candidates: %w", err)
 	}
 
-	return results, nil
+	// Deduplicate results
+	dedupedResults := deduplicateResults(results)
+
+	// Limit to top 5 after deduplication
+	if len(dedupedResults) > 5 {
+		dedupedResults = dedupedResults[:5]
+	}
+
+	return dedupedResults, nil
 }
 
 func printCandidates(candidates []raggo.SearchResult) {
