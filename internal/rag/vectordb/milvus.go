@@ -458,7 +458,7 @@ func (m *MilvusDB) Search(ctx context.Context, collectionName string, query []fl
 			"resultCount", searchResults[0].ResultCount)
 	}
 
-	results, err := m.processResults(searchResults, limit)
+	results, err := m.processResults(searchResults, []string{}, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process search results: %w", err)
 	}
@@ -512,7 +512,14 @@ func (m *MilvusDB) fallbackSearch(ctx context.Context, collectionName string, qu
 	return results, nil
 }
 
-func (m *MilvusDB) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param rag.SearchParam) ([]rag.SearchResult, error) {
+func (m *MilvusDB) HybridSearch(
+	ctx context.Context,
+	collectionName string,
+	queries map[string][]float64,
+	fields []string,
+	limit int,
+	param rag.SearchParam,
+) ([]rag.SearchResult, error) {
 	rag.GlobalLogger.Debug("Performing hybrid search in MilvusDB", "collectionName", collectionName, "limit", limit)
 
 	err := m.ensureCollectionLoaded(ctx, collectionName)
@@ -541,19 +548,25 @@ func (m *MilvusDB) HybridSearch(ctx context.Context, collectionName string, quer
 		return nil, fmt.Errorf("failed to create search param: %w", err)
 	}
 
+	// Create ANNSearchRequests
 	searchRequests := make([]*client.ANNSearchRequest, 0, len(queries))
 	for field, query := range queries {
 		vector := toFloat32Slice(normalizeVector(query))
-		searchRequests = append(searchRequests, client.NewANNSearchRequest(field, m.metric, "", []entity.Vector{entity.FloatVector(vector)}, sp, limit))
+		searchRequests = append(searchRequests,
+			client.NewANNSearchRequest(field, m.metric, "", []entity.Vector{entity.FloatVector(vector)}, sp, limit))
 	}
 
+	// Prepare output fields
+	outputFields := append([]string{"id", "text", "token_size", "start_sentence", "end_sentence"}, fields...)
+
+	// Perform hybrid search
 	searchResults, err := m.client.HybridSearch(
 		ctx,
 		collectionName,
-		[]string{}, // partitionNames (empty slice if searching all partitions)
+		[]string{}, // empty slice for partitionNames
 		limit,
-		[]string{"id", "text", "token_size", "start_sentence", "end_sentence"},
-		client.NewRRFReranker(),
+		outputFields,
+		client.NewRRFReranker(), // Use RRF reranker as in the example
 		searchRequests,
 		// Add any additional client.SearchQueryOptionFunc if needed
 	)
@@ -561,7 +574,7 @@ func (m *MilvusDB) HybridSearch(ctx context.Context, collectionName string, quer
 		return nil, fmt.Errorf("failed to perform hybrid search: %w", err)
 	}
 
-	results, err := m.processResults(searchResults, limit)
+	results, err := m.processResults(searchResults, fields, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to process search results: %w", err)
 	}
@@ -658,7 +671,7 @@ func cosineSimilarity(a, b []float64) float64 {
 	return dotProduct / magnitude
 }
 
-func (m *MilvusDB) processResults(searchResults []client.SearchResult, limit int) ([]rag.SearchResult, error) {
+func (m *MilvusDB) processResults(searchResults []client.SearchResult, fields []string, limit int) ([]rag.SearchResult, error) {
 	if len(searchResults) == 0 || searchResults[0].ResultCount == 0 {
 		return nil, errors.New("no search results found")
 	}
@@ -678,6 +691,13 @@ func (m *MilvusDB) processResults(searchResults []client.SearchResult, limit int
 				score = 1 / (1 + score)
 			}
 
+			fieldValues := make(map[string]interface{})
+			for _, field := range fields {
+				if value, err := result.Fields.GetColumn(field).Get(i); err == nil {
+					fieldValues[field] = value
+				}
+			}
+
 			results = append(results, rag.SearchResult{
 				ID:    id,
 				Text:  text.(string),
@@ -687,32 +707,44 @@ func (m *MilvusDB) processResults(searchResults []client.SearchResult, limit int
 					"start_sentence": startSentence,
 					"end_sentence":   endSentence,
 				},
+				Fields: fieldValues,
 			})
-
-			rag.GlobalLogger.Debug("Processing search result",
-				"id", id,
-				"text", text,
-				"rawScore", result.Scores[i],
-				"normalizedScore", score,
-				"tokenSize", tokenSize,
-				"startSentence", startSentence,
-				"endSentence", endSentence)
 		}
 	}
 
 	// Sort results based on score
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score < results[j].Score // For L2 distance, lower is better
+		return results[i].Score > results[j].Score // Higher scores are better after normalization
 	})
 
-	if len(results) < limit {
-		rag.GlobalLogger.Warn("Fewer results returned than requested", "requested", limit, "returned", len(results))
-	} else if len(results) > limit {
+	if len(results) > limit {
 		results = results[:limit]
 	}
 
-	rag.GlobalLogger.Debug("Search results processed", "resultCount", len(results))
 	return results, nil
+}
+
+func (m *MilvusDB) ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error {
+
+	collInfo, err := m.client.DescribeCollection(ctx, collectionName)
+	if err != nil {
+		return fmt.Errorf("failed to describe collection: %w", err)
+	}
+
+	validFields := make(map[string]bool)
+	for _, field := range collInfo.Schema.Fields {
+		if field.DataType == entity.FieldTypeFloatVector {
+			validFields[field.Name] = true
+		}
+	}
+
+	for _, field := range queryFields {
+		if !validFields[field] {
+			return fmt.Errorf("field '%s' is not a valid vector field in collection '%s'", field, collectionName)
+		}
+	}
+
+	return nil
 }
 
 func (m *MilvusDB) Close() error {

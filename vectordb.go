@@ -11,7 +11,8 @@ import (
 type VectorDB interface {
 	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
 	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
-	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error)
+	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error)
+	ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error
 	Close() error
 }
 
@@ -104,11 +105,14 @@ func (w *vectorDBWrapper) Search(ctx context.Context, collectionName string, que
 	return w.internal.Search(ctx, collectionName, query, limit, param)
 }
 
-func (w *vectorDBWrapper) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error) {
-	return w.internal.HybridSearch(ctx, collectionName, queries, limit, param)
+func (w *vectorDBWrapper) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error) {
+	return w.internal.HybridSearch(ctx, collectionName, queries, fields, limit, param)
+}
+
+func (w *vectorDBWrapper) ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error {
+	return w.internal.ValidateQueryFields(ctx, collectionName, queryFields)
 }
 
 func (w *vectorDBWrapper) Close() error {
 	return w.internal.Close()
 }
-

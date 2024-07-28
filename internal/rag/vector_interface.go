@@ -9,7 +9,8 @@ import (
 type VectorDB interface {
 	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
 	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
-	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error)
+	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error)
+	ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error
 	Close() error
 }
 
@@ -75,6 +76,7 @@ type SearchResult struct {
 	Score    float64
 	Text     string
 	Metadata map[string]interface{}
+	Fields   map[string]interface{} // New field to store additional returned fields
 }
 
 // VectorDBError represents an error that occurred during a vector database operation

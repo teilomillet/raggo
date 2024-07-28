@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -27,7 +28,7 @@ func (m *MemoryStore) SaveEmbeddings(ctx context.Context, collectionName string,
 	return nil
 }
 
-func (m *MemoryStore) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, limit int, param SearchParam) ([]SearchResult, error) {
+func (m *MemoryStore) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error) {
 	GlobalLogger.Debug("Performing hybrid search in MemoryStore", "collectionName", collectionName, "limit", limit)
 	collection, ok := m.chunks[collectionName]
 	if !ok {
@@ -44,11 +45,21 @@ func (m *MemoryStore) HybridSearch(ctx context.Context, collectionName string, q
 			}
 		}
 		averageScore := totalScore / float64(len(queries))
+
+		// Prepare the Fields map
+		resultFields := make(map[string]interface{})
+		for _, field := range fields {
+			if value, ok := chunk.Metadata[field]; ok {
+				resultFields[field] = value
+			}
+		}
+
 		results = append(results, SearchResult{
 			ID:       int64(i),
 			Text:     chunk.Text,
 			Score:    averageScore,
 			Metadata: chunk.Metadata,
+			Fields:   resultFields,
 		})
 	}
 
@@ -62,6 +73,61 @@ func (m *MemoryStore) HybridSearch(ctx context.Context, collectionName string, q
 
 	GlobalLogger.Debug("Hybrid search completed", "resultCount", len(results))
 	return results, nil
+}
+
+func (m *MemoryStore) Search(ctx context.Context, collectionName string, query []float64, topK int, param SearchParam) ([]SearchResult, error) {
+	GlobalLogger.Debug("Searching in MemoryStore", "collectionName", collectionName, "topK", topK)
+	collection, ok := m.chunks[collectionName]
+	if !ok {
+		GlobalLogger.Warn("Collection not found in MemoryStore", "collectionName", collectionName)
+		return nil, nil
+	}
+
+	results := make([]SearchResult, 0, len(collection))
+	for i, chunk := range collection {
+		// Assume the first embedding is the default one for single-vector search
+		defaultEmbedding := chunk.Embeddings["default"]
+		score := cosineSimilarity(query, defaultEmbedding)
+		results = append(results, SearchResult{
+			ID:       int64(i),
+			Text:     chunk.Text,
+			Score:    score,
+			Metadata: chunk.Metadata,
+			Fields:   make(map[string]interface{}), // Add an empty Fields map for consistency
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	if len(results) > topK {
+		results = results[:topK]
+	}
+
+	GlobalLogger.Debug("Search completed", "resultCount", len(results))
+	return results, nil
+}
+
+func (m *MemoryStore) ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error {
+	collection, ok := m.chunks[collectionName]
+	if !ok {
+		return fmt.Errorf("collection '%s' not found", collectionName)
+	}
+
+	if len(collection) == 0 {
+		return fmt.Errorf("collection '%s' is empty", collectionName)
+	}
+
+	// Check the first chunk to validate fields
+	firstChunk := collection[0]
+	for _, field := range queryFields {
+		if _, ok := firstChunk.Embeddings[field]; !ok {
+			return fmt.Errorf("field '%s' not found in collection '%s'", field, collectionName)
+		}
+	}
+
+	return nil
 }
 
 func normalizeVector(vector []float64) []float64 {
@@ -86,39 +152,6 @@ func innerProduct(a, b []float64) float64 {
 		sum += a[i] * b[i]
 	}
 	return sum
-}
-
-func (m *MemoryStore) Search(ctx context.Context, collectionName string, query []float64, topK int, param SearchParam) ([]SearchResult, error) {
-	GlobalLogger.Debug("Searching in MemoryStore", "collectionName", collectionName, "topK", topK)
-	collection, ok := m.chunks[collectionName]
-	if !ok {
-		GlobalLogger.Warn("Collection not found in MemoryStore", "collectionName", collectionName)
-		return nil, nil
-	}
-
-	results := make([]SearchResult, 0, len(collection))
-	for i, chunk := range collection {
-		// Assume the first embedding is the default one for single-vector search
-		defaultEmbedding := chunk.Embeddings["default"]
-		score := cosineSimilarity(query, defaultEmbedding)
-		results = append(results, SearchResult{
-			ID:       int64(i),
-			Text:     chunk.Text,
-			Score:    score,
-			Metadata: chunk.Metadata,
-		})
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
-	})
-
-	if len(results) > topK {
-		results = results[:topK]
-	}
-
-	GlobalLogger.Debug("Search completed", "resultCount", len(results))
-	return results, nil
 }
 
 func (m *MemoryStore) Close() error {

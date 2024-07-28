@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -227,6 +228,22 @@ func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo
 		return fmt.Errorf("failed to embed chunks: %w", err)
 	}
 
+	// Add structured data to each chunk's metadata
+	for i := range embeddedChunks {
+		embeddedChunks[i].Metadata["name"] = resumeInfo.Name
+		embeddedChunks[i].Metadata["skills"] = strings.Join(resumeInfo.Skills, ", ")
+		embeddedChunks[i].Metadata["professional_summary"] = resumeInfo.ProfessionalSummary
+		embeddedChunks[i].Metadata["work_experience"] = resumeInfo.WorkExperience
+	}
+
+	log.Printf("Embedded chunks structure for %s:", file)
+	for i, chunk := range embeddedChunks {
+		log.Printf("  Chunk %d:", i)
+		log.Printf("    Text: %s", truncateString(chunk.Text, 50))
+		log.Printf("    Metadata: %+v", chunk.Metadata)
+		log.Printf("    Embedding Fields: %v", reflect.ValueOf(chunk.Embeddings).MapKeys())
+	}
+
 	log.Printf("Saving embeddings for resume: %s", file)
 	err = vectorDB.SaveEmbeddings(context.Background(), "resumes", embeddedChunks)
 	if err != nil {
@@ -234,9 +251,25 @@ func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo
 	}
 	log.Printf("Embeddings saved successfully for resume: %s", file)
 
-	log.Printf("Successfully processed and saved resume: %s", file)
+	// Add debug logging for database schema
+	if debugDB, ok := vectorDB.(interface {
+		DescribeCollection(string) (map[string]string, error)
+	}); ok {
+		if schema, err := debugDB.DescribeCollection("resumes"); err == nil {
+			log.Printf("Collection 'resumes' schema after saving %s:", file)
+			for field, fieldType := range schema {
+				log.Printf("  %s: %s", field, fieldType)
+			}
+		} else {
+			log.Printf("Failed to describe collection: %v", err)
+		}
+	} else {
+		log.Printf("VectorDB does not support schema description")
+	}
+
 	return nil
 }
+
 func createStandardizedSummary(llm goal.LLM, content string) (string, error) {
 	summarizePrompt := goal.NewPrompt(
 		"Summarize the given resume in the following standardized format:\n" +
@@ -375,8 +408,11 @@ func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService 
 		queries[field] = embedding
 	}
 
+	// Define the fields we want to retrieve
+	fields := []string{"name", "skills", "professional_summary", "work_experience"}
+
 	// Perform hybrid search
-	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, 5, raggo.NewDefaultSearchParam())
+	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, fields, 5, raggo.NewDefaultSearchParam())
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform hybrid search for candidates: %w", err)
 	}
@@ -388,7 +424,21 @@ func printCandidates(candidates []raggo.SearchResult) {
 	fmt.Println("Top candidates for the job offer:")
 	for i, candidate := range candidates {
 		fmt.Printf("%d. Score: %.4f\n", i+1, candidate.Score)
-		fmt.Printf("   Text: %s\n\n", truncateString(candidate.Text, 200))
+
+		if name, ok := candidate.Fields["name"].(string); ok {
+			fmt.Printf("   Name: %s\n", name)
+		}
+		if skills, ok := candidate.Fields["skills"].([]string); ok {
+			fmt.Printf("   Skills: %s\n", strings.Join(skills, ", "))
+		}
+		if summary, ok := candidate.Fields["professional_summary"].(string); ok {
+			fmt.Printf("   Professional Summary: %s\n", truncateString(summary, 100))
+		}
+		if experience, ok := candidate.Fields["work_experience"].(string); ok {
+			fmt.Printf("   Work Experience: %s\n", truncateString(experience, 100))
+		}
+
+		fmt.Println()
 	}
 }
 
