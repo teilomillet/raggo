@@ -97,6 +97,7 @@ func main() {
 		Fields: []raggo.Field{
 			{Name: "ID", DataType: "int64", PrimaryKey: true, AutoID: false},
 			{Name: "Embedding", DataType: "float_vector", Dimension: 1536},
+			{Name: "Text", DataType: "varchar", MaxLength: 65535},
 		},
 	}
 	log.Printf("Created collection %s with schema: %+v", collectionName, schema)
@@ -126,9 +127,9 @@ func main() {
 			Fields: map[string]interface{}{
 				"ID":        id,
 				"Embedding": chunk.Embeddings["default"],
+				"Text":      chunk.Text,
 			},
 		})
-		textStorage[id] = chunk.Text
 		log.Printf("Stored text for ID %d: %s", id, truncateString(chunk.Text, 50))
 	}
 
@@ -137,10 +138,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to insert records: %v", err)
 	}
-
-	// for i, record := range records {
-	// 	log.Printf("Record %d: %+v", i, record)
-	// }
 
 	// Flush the inserted data
 	err = milvusDB.Flush(context.Background(), collectionName)
@@ -175,43 +172,70 @@ func main() {
 		log.Printf("ID %d: %s", id, truncateString(text, 50))
 	}
 
-	// Perform a hybrid search
-	var hybridResults []raggo.SearchResult
+	// Set the column names before searching
+	milvusDB.SetColumnNames([]string{"ID", "Text"})
 
-	if len(embeddedChunks) > 1 {
-		query1 := embeddedChunks[0].Embeddings["default"]
-		query2 := embeddedChunks[1].Embeddings["default"]
-		topK := 5
+	// Perform a regular search
+	var searchResults []raggo.SearchResult
 
-		hybridResults, err = milvusDB.HybridSearch(context.Background(), collectionName, []raggo.Vector{query1, query2}, topK)
-	} else if len(embeddedChunks) == 1 {
+	if len(embeddedChunks) > 0 {
 		query := embeddedChunks[0].Embeddings["default"]
 		topK := 5
 
-		hybridResults, err = milvusDB.Search(context.Background(), collectionName, query, topK)
+		searchResults, err = milvusDB.Search(context.Background(), collectionName, query, topK)
+		if err != nil {
+			log.Fatalf("Failed to perform regular search: %v", err)
+		}
+
+		log.Printf("Regular Search returned %d results", len(searchResults))
+
+		fmt.Println("\nMilvus Regular Search Results:")
+		if len(searchResults) == 0 {
+			fmt.Println("No results found.")
+		} else {
+			for i, result := range searchResults {
+				text, ok := result.Fields["Text"].(string)
+				if !ok {
+					log.Printf("Text not found for ID %d", result.ID)
+					continue
+				}
+				fmt.Printf("%d. Score: %f, Text: %s\n", i+1, result.Score, truncateString(text, 50))
+			}
+		}
+
+		// Perform a hybrid search
+		var hybridResults []raggo.SearchResult
+
+		if len(embeddedChunks) > 1 {
+			query1 := embeddedChunks[0].Embeddings["default"]
+			query2 := embeddedChunks[1].Embeddings["default"]
+			topK := 5
+
+			hybridResults, err = milvusDB.HybridSearch(context.Background(), collectionName, "Embedding", []raggo.Vector{query1, query2}, topK)
+			if err != nil {
+				log.Fatalf("Failed to perform hybrid search: %v", err)
+			}
+
+			log.Printf("Hybrid Search returned %d results", len(hybridResults))
+
+			fmt.Println("\nMilvus Hybrid Search Results:")
+			if len(hybridResults) == 0 {
+				fmt.Println("No results found.")
+			} else {
+				for i, result := range hybridResults {
+					text, ok := result.Fields["Text"].(string)
+					if !ok {
+						log.Printf("Text not found for ID %d", result.ID)
+						continue
+					}
+					fmt.Printf("%d. Score: %f, Text: %s\n", i+1, result.Score, truncateString(text, 50))
+				}
+			}
+		} else {
+			fmt.Println("Not enough embedded chunks for hybrid search.")
+		}
 	} else {
 		log.Fatalf("No embedded chunks to search with")
-	}
-
-	if err != nil {
-		log.Fatalf("Failed to perform search: %v", err)
-	}
-
-	log.Printf("Search returned %d results", len(hybridResults))
-
-	// Print search results
-	fmt.Println("\nMilvus Search Results:")
-	if len(hybridResults) == 0 {
-		fmt.Println("No results found.")
-	} else {
-		for i, result := range hybridResults {
-			text, ok := textStorage[result.ID]
-			if !ok {
-				log.Printf("Text not found for ID %d", result.ID)
-			}
-			log.Printf("Result %d: ID=%d, Score=%f, Text found: %v", i, result.ID, result.Score, ok)
-			fmt.Printf("%d. Score: %f, Text: %s\n", i+1, result.Score, truncateString(text, 50))
-		}
 	}
 }
 
