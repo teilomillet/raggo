@@ -16,6 +16,11 @@ import (
 	"github.com/teilomillet/raggo"
 )
 
+var debug = raggo.Debug
+var info = raggo.Info
+var warn = raggo.Warn
+var errorLog = raggo.Error
+
 type ResumeCache struct {
 	Hash          string
 	Summary       string
@@ -35,11 +40,14 @@ type ResumeInfo struct {
 }
 
 func main() {
+	fmt.Println("Starting recruit_example.go")
 
 	// Set log level to Debug for more detailed output
-	raggo.SetLogLevel(raggo.LogLevelWarn)
+	raggo.SetLogLevel(raggo.LogLevelDebug)
+	info("Log level set")
 
 	// Initialize the LLM
+	debug("Initializing LLM...")
 	llm, err := goal.NewLLM(
 		goal.SetProvider("openai"),
 		goal.SetModel("gpt-4o-mini"),
@@ -49,9 +57,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create LLM: %v", err)
 	}
+	info("LLM initialized")
 
 	// Initialize raggo components
+	debug("Initializing parser...")
 	parser := raggo.NewParser()
+	debug("Parser initialized")
+
+	debug("Initializing chunker...")
 	chunker, err := raggo.NewChunker(
 		raggo.ChunkSize(512),
 		raggo.ChunkOverlap(64),
@@ -59,7 +72,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create chunker: %v", err)
 	}
+	debug("Chunker initialized")
 
+	debug("Initializing embedder...")
 	embedder, err := raggo.NewEmbedder(
 		raggo.SetProvider("openai"),
 		raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
@@ -68,39 +83,116 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
 	}
+	debug("Embedder initialized")
 
 	embeddingService := raggo.NewEmbeddingService(embedder)
+	debug("Embedding service created")
 
+	debug("Creating VectorDB...")
 	vectorDB, err := raggo.NewVectorDB(
-		raggo.SetVectorDBType("memory"),
-		raggo.SetVectorDBDimension(1536),
+		raggo.WithType("milvus"),
+		raggo.WithAddress("localhost:19530"),
+		raggo.WithMaxPoolSize(10),
+		raggo.WithTimeout(30*time.Second),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create vector database: %v", err)
 	}
-	defer vectorDB.Close()
+	debug("VectorDB created")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	debug("Connecting to VectorDB...")
+	err = vectorDB.Connect(ctx)
+	if err != nil {
+		log.Fatalf("Failed to connect to Milvus database: %v", err)
+	}
+	debug("Connected to VectorDB")
+
+	// Define the schema and create the collection
+	collectionName := "resumes"
+	schema := raggo.Schema{
+		Name: collectionName,
+		Fields: []raggo.Field{
+			{Name: "ID", DataType: "int64", PrimaryKey: true, AutoID: true},
+			{Name: "Embedding", DataType: "float_vector", Dimension: 1536},
+			{Name: "name", DataType: "varchar", MaxLength: 255},
+			{Name: "skills", DataType: "varchar", MaxLength: 1000},
+			{Name: "professional_summary", DataType: "varchar", MaxLength: 2000},
+			{Name: "work_experience", DataType: "varchar", MaxLength: 5000},
+		},
+	}
+
+	exists, err := vectorDB.HasCollection(context.Background(), collectionName)
+	if err != nil {
+		log.Fatalf("Failed to check if collection exists: %v", err)
+	}
+	if exists {
+		debug("Dropping existing collection: %s", collectionName)
+		err = vectorDB.DropCollection(context.Background(), collectionName)
+		if err != nil {
+			log.Fatalf("Failed to drop existing collection: %v", err)
+		}
+	}
+	debug("Creating collection with schema:")
+	for _, field := range schema.Fields {
+		debug("Field: %s, Type: %s, PrimaryKey: %v, AutoID: %v, Dimension: %d, MaxLength: %d",
+			field.Name, field.DataType, field.PrimaryKey, field.AutoID, field.Dimension, field.MaxLength)
+	}
+	err = vectorDB.CreateCollection(context.Background(), collectionName, schema)
+	if err != nil {
+		log.Fatalf("Failed to create collection: %v", err)
+	}
+	debug("Collection created successfully")
+
+	// Add this block to create the index
+	debug("Creating index on Embedding field...")
+	err = vectorDB.CreateIndex(context.Background(), collectionName, "Embedding", raggo.Index{
+		Type:   "HNSW",
+		Metric: "L2",
+		Parameters: map[string]interface{}{
+			"M":              16,
+			"efConstruction": 64,
+		},
+	})
+	if err != nil {
+		log.Fatalf("Failed to create index: %v", err)
+	}
+	debug("Index created successfully")
+
+	debug("Loading collection: %s", collectionName)
+	err = vectorDB.LoadCollection(context.Background(), collectionName)
+	if err != nil {
+		log.Fatalf("Failed to load collection: %v", err)
+	}
+	debug("Collection loaded successfully")
 
 	// Get the current working directory
 	wd, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("Failed to get working directory: %v", err)
 	}
-
 	// Construct the path to the testdata directory
 	resumeDir := filepath.Join(wd, "testdata")
 	log.Printf("Processing resumes from directory: %s", resumeDir)
 
 	// Process resumes
+	debug("Starting resume processing...")
 	err = processResumes(llm, parser, chunker, embeddingService, vectorDB, resumeDir)
 	if err != nil {
 		log.Fatalf("Failed to process resumes: %v", err)
 	}
+	debug("Resume processing completed.")
+
+	debug("\nPreparing job offer for search...")
 
 	// Job offer
 	jobOffer := "We are looking for a software engineer with 5+ years of experience in Go, distributed systems, and cloud technologies. The ideal candidate should have strong problem-solving skills and experience with Docker and Kubernetes."
 
+	vectorDB.SetColumnNames([]string{"name", "skills", "professional_summary", "work_experience"})
+
 	// Perform normal vector search
-	fmt.Println("\nPerforming normal vector search:")
+	info("\nPerforming normal vector search:")
 	candidates, err := searchCandidates(context.Background(), llm, embeddingService, vectorDB, jobOffer)
 	if err != nil {
 		log.Fatalf("Failed to search candidates: %v", err)
@@ -109,16 +201,18 @@ func main() {
 	printCandidates(candidates)
 
 	// Perform hybrid search
-	fmt.Println("\nPerforming hybrid search:")
+	info("\nStarting hybrid search process...")
 	hybridCandidates, err := hybridSearchCandidates(context.Background(), llm, embeddingService, vectorDB, jobOffer)
 	if err != nil {
 		log.Fatalf("Failed to perform hybrid search for candidates: %v", err)
 	}
+	fmt.Printf("Hybrid search completed. Found %d candidates.\n", len(hybridCandidates))
 
 	printCandidates(hybridCandidates)
 }
 
-func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, resumeDir string) error {
+func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, resumeDir string) error {
+	fmt.Printf("Scanning directory: %s\n", resumeDir)
 	files, err := filepath.Glob(filepath.Join(resumeDir, "*.pdf"))
 	if err != nil {
 		return fmt.Errorf("failed to list resume files: %w", err)
@@ -126,7 +220,7 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 	if len(files) == 0 {
 		return fmt.Errorf("no PDF files found in directory: %s", resumeDir)
 	}
-	log.Printf("Found %d resume files to process", len(files))
+	fmt.Printf("Found %d resume files to process\n", len(files))
 
 	cacheDir := filepath.Join(resumeDir, ".cache")
 	err = os.MkdirAll(cacheDir, 0755)
@@ -137,6 +231,7 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, 5) // Limit concurrency to 5 goroutines
 
+	fmt.Println("Starting to process resumes...")
 	for _, file := range files {
 		wg.Add(1)
 		go func(file string) {
@@ -153,20 +248,10 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 
 	wg.Wait()
 
-	// Count total items in the collection
-	if counter, ok := vectorDB.(interface{ Count(string) (int, error) }); ok {
-		count, err := counter.Count("resumes")
-		if err != nil {
-			log.Printf("Failed to get collection item count: %v", err)
-		} else {
-			log.Printf("Total items in 'resumes' collection: %d", count)
-		}
-	}
-
 	return nil
 }
 
-func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, cacheDir string) error {
+func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, cacheDir string) error {
 	log.Printf("Processing resume: %s", file)
 
 	cacheFile := filepath.Join(cacheDir, filepath.Base(file)+".cache")
@@ -244,28 +329,25 @@ func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo
 		log.Printf("    Embedding Fields: %v", reflect.ValueOf(chunk.Embeddings).MapKeys())
 	}
 
-	log.Printf("Saving embeddings for resume: %s", file)
-	err = vectorDB.SaveEmbeddings(context.Background(), "resumes", embeddedChunks)
-	if err != nil {
-		return fmt.Errorf("failed to save embeddings: %w", err)
-	}
-	log.Printf("Embeddings saved successfully for resume: %s", file)
-
-	// Add debug logging for database schema
-	if debugDB, ok := vectorDB.(interface {
-		DescribeCollection(string) (map[string]string, error)
-	}); ok {
-		if schema, err := debugDB.DescribeCollection("resumes"); err == nil {
-			log.Printf("Collection 'resumes' schema after saving %s:", file)
-			for field, fieldType := range schema {
-				log.Printf("  %s: %s", field, fieldType)
-			}
-		} else {
-			log.Printf("Failed to describe collection: %v", err)
+	records := make([]raggo.Record, len(embeddedChunks))
+	for i, chunk := range embeddedChunks {
+		records[i] = raggo.Record{
+			Fields: map[string]interface{}{
+				"Embedding":            chunk.Embeddings["default"],
+				"name":                 truncateString(resumeInfo.Name, 255),
+				"skills":               truncateString(strings.Join(resumeInfo.Skills, ", "), 1000),
+				"professional_summary": truncateString(resumeInfo.ProfessionalSummary, 2000),
+				"work_experience":      truncateString(resumeInfo.WorkExperience, 5000),
+			},
 		}
-	} else {
-		log.Printf("VectorDB does not support schema description")
 	}
+
+	debug("Inserting %d records for resume: %s", len(records), file)
+	err = vectorDB.Insert(context.Background(), "resumes", records)
+	if err != nil {
+		return fmt.Errorf("failed to insert records: %w", err)
+	}
+	debug("Successfully inserted %d records for resume: %s", len(records), file)
 
 	return nil
 }
@@ -361,7 +443,10 @@ func getCollectionItemCount(vectorDB raggo.VectorDB, collectionName string) (int
 	return 0, fmt.Errorf("getCollectionItemCount not implemented")
 }
 
-func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+
+	fmt.Println("Starting candidate search...")
+
 	// Summarize the job offer
 	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
 	if err != nil {
@@ -386,26 +471,34 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 		return nil, fmt.Errorf("no embeddings generated for job summary")
 	}
 
+	debug("Performing search on collection: %s", "resumes")
+	debug("Search vector length: %d", len(jobEmbeddings[0].Embeddings["default"]))
+
 	// Search for matching candidates
-	results, err := vectorDB.Search(ctx, "resumes", jobEmbeddings[0].Embeddings["default"], 5, raggo.NewDefaultSearchParam())
+	debug("Performing search on collection: %s with vector of length %d", "resumes", len(jobEmbeddings[0].Embeddings["default"]))
+	results, err := vectorDB.Search(ctx, "resumes", raggo.Vector(jobEmbeddings[0].Embeddings["default"]), 5)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search for candidates: %w", err)
 	}
+	debug("Search completed. Found %d results", len(results))
 
 	return results, nil
 }
 
-func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+	fmt.Println("Starting hybrid search for candidates...")
+
 	// Summarize the job offer
 	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to summarize job offer: %w", err)
 	}
+	fmt.Printf("Job summary created: %s\n", truncateString(jobSummary, 100))
 
 	// Create a single chunk for the job summary
 	jobChunk := raggo.Chunk{
 		Text:          jobSummary,
-		TokenSize:     len(strings.Split(jobSummary, " ")), // Simple word count as a proxy for token size
+		TokenSize:     len(strings.Split(jobSummary, " ")),
 		StartSentence: 0,
 		EndSentence:   1,
 	}
@@ -419,28 +512,24 @@ func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService 
 	if len(jobEmbeddings) == 0 {
 		return nil, fmt.Errorf("no embeddings generated for job summary")
 	}
+	fmt.Println("Job summary embedded successfully")
 
-	// Prepare queries for hybrid search
-	queries := make(map[string][]float64)
-	for field, embedding := range jobEmbeddings[0].Embeddings {
-		queries[field] = embedding
-	}
-
-	// Define the fields we want to retrieve
-	fields := []string{"name", "skills", "professional_summary", "work_experience"}
-
-	// Perform hybrid search with an increased limit
-	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, fields, 10, raggo.NewDefaultSearchParam()) // Increased limit to 10
+	// Perform hybrid search
+	fmt.Println("Performing hybrid search...")
+	results, err := vectorDB.HybridSearch(ctx, "resumes", "Embedding", []raggo.Vector{raggo.Vector(jobEmbeddings[0].Embeddings["default"])}, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform hybrid search for candidates: %w", err)
 	}
+	fmt.Printf("Hybrid search returned %d results\n", len(results))
 
 	// Deduplicate results
 	dedupedResults := deduplicateResults(results)
+	fmt.Printf("After deduplication: %d results\n", len(dedupedResults))
 
 	// Limit to top 5 after deduplication
 	if len(dedupedResults) > 5 {
 		dedupedResults = dedupedResults[:5]
+		fmt.Println("Limited to top 5 results")
 	}
 
 	return dedupedResults, nil
@@ -450,12 +539,11 @@ func printCandidates(candidates []raggo.SearchResult) {
 	fmt.Println("Top candidates for the job offer:")
 	for i, candidate := range candidates {
 		fmt.Printf("%d. Score: %.4f\n", i+1, candidate.Score)
-
 		if name, ok := candidate.Fields["name"].(string); ok {
 			fmt.Printf("   Name: %s\n", name)
 		}
-		if skills, ok := candidate.Fields["skills"].([]string); ok {
-			fmt.Printf("   Skills: %s\n", strings.Join(skills, ", "))
+		if skills, ok := candidate.Fields["skills"].(string); ok {
+			fmt.Printf("   Skills: %s\n", skills)
 		}
 		if summary, ok := candidate.Fields["professional_summary"].(string); ok {
 			fmt.Printf("   Professional Summary: %s\n", truncateString(summary, 100))
@@ -463,7 +551,6 @@ func printCandidates(candidates []raggo.SearchResult) {
 		if experience, ok := candidate.Fields["work_experience"].(string); ok {
 			fmt.Printf("   Work Experience: %s\n", truncateString(experience, 100))
 		}
-
 		fmt.Println()
 	}
 }
@@ -472,5 +559,6 @@ func truncateString(s string, maxLength int) string {
 	if len(s) <= maxLength {
 		return s
 	}
-	return s[:maxLength] + "..."
+	return s[:maxLength]
 }
+

@@ -1,90 +1,97 @@
+// File: vectordb.go
+
 package rag
 
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
-// VectorDB represents a vector database
 type VectorDB interface {
-	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
-	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
-	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error)
-	ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error
+	Connect(ctx context.Context) error
 	Close() error
+	HasCollection(ctx context.Context, name string) (bool, error)
+	DropCollection(ctx context.Context, name string) error
+	CreateCollection(ctx context.Context, name string, schema Schema) error
+	Insert(ctx context.Context, collectionName string, data []Record) error
+	Flush(ctx context.Context, collectionName string) error
+	CreateIndex(ctx context.Context, collectionName, field string, index Index) error
+	LoadCollection(ctx context.Context, name string) error
+	Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error)
+	HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error)
+	SetColumnNames(names []string)
 }
 
-// VectorDBConfig holds the configuration for creating a VectorDB
-type VectorDBConfig struct {
-	Type      string
-	Address   string
-	Dimension int
-	Options   map[string]interface{}
+type Schema struct {
+	Name        string
+	Description string
+	Fields      []Field
 }
 
-// VectorDBFactory is a function type for creating VectorDB instances
-type VectorDBFactory func(VectorDBConfig) (VectorDB, error)
-
-var vectorDBRegistry = make(map[string]VectorDBFactory)
-
-// RegisterVectorDB registers a new vector database type with its factory function
-func RegisterVectorDB(name string, factory VectorDBFactory) {
-	vectorDBRegistry[name] = factory
+type Field struct {
+	Name       string
+	DataType   string
+	PrimaryKey bool
+	AutoID     bool
+	Dimension  int
+	MaxLength  int
 }
 
-// NewVectorDB creates a new VectorDB instance based on the provided configuration
-func NewVectorDB(config VectorDBConfig) (VectorDB, error) {
-	if config.Type == "" {
-		return nil, fmt.Errorf("vector database type must be specified")
-	}
-
-	factory, ok := vectorDBRegistry[config.Type]
-	if !ok {
-		return nil, fmt.Errorf("unsupported vector database type: %s", config.Type)
-	}
-
-	return factory(config)
+type Record struct {
+	Fields map[string]interface{}
 }
 
-// SearchParam interface for search-related parameters
-type SearchParam interface {
-	Params() map[string]interface{}
+type Vector []float64
+
+type Index struct {
+	Type       string
+	Metric     string
+	Parameters map[string]interface{}
 }
 
-// DefaultSearchParam provides a basic implementation of SearchParam
-type DefaultSearchParam struct {
-	params map[string]interface{}
-}
-
-func NewDefaultSearchParam() *DefaultSearchParam {
-	return &DefaultSearchParam{
-		params: make(map[string]interface{}),
-	}
-}
-
-func (d *DefaultSearchParam) Params() map[string]interface{} {
-	return d.params
-}
-
-func (d *DefaultSearchParam) SetParam(key string, value interface{}) {
-	d.params[key] = value
-}
-
-// SearchResult represents a single search result
 type SearchResult struct {
-	ID       interface{}
-	Score    float64
-	Text     string
-	Metadata map[string]interface{}
-	Fields   map[string]interface{} // New field to store additional returned fields
+	ID     int64
+	Score  float64
+	Fields map[string]interface{}
 }
 
-// VectorDBError represents an error that occurred during a vector database operation
-type VectorDBError struct {
-	Op  string
-	Err error
+type Config struct {
+	Type        string
+	Address     string
+	MaxPoolSize int
+	Timeout     time.Duration
 }
 
-func (e *VectorDBError) Error() string {
-	return fmt.Sprintf("vectordb operation %s failed: %v", e.Op, e.Err)
+type Option func(*Config)
+
+func (c *Config) SetType(dbType string) *Config {
+	c.Type = dbType
+	return c
+}
+
+func (c *Config) SetAddress(address string) *Config {
+	c.Address = address
+	return c
+}
+
+func (c *Config) SetMaxPoolSize(size int) *Config {
+	c.MaxPoolSize = size
+	return c
+}
+
+func (c *Config) SetTimeout(timeout time.Duration) *Config {
+	c.Timeout = timeout
+	return c
+}
+
+func NewVectorDB(cfg *Config) (VectorDB, error) {
+	switch cfg.Type {
+	case "milvus":
+		return newMilvusDB(cfg)
+	case "memory":
+		return newMemoryDB(cfg)
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
+	}
 }

@@ -1,118 +1,151 @@
+// File: vectordb.go
+
 package raggo
 
 import (
 	"context"
-
+	"fmt"
 	"github.com/teilomillet/raggo/internal/rag"
-	_ "github.com/teilomillet/raggo/internal/rag/vectordb"
+	"time"
 )
 
-// VectorDB represents a vector database
-type VectorDB interface {
-	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
-	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
-	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error)
-	ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error
-	Close() error
+type VectorDB struct {
+	db rag.VectorDB
 }
 
-// SearchParam interface for search-related parameters
-type SearchParam = rag.SearchParam
-
-// SearchResult represents a single search result
-type SearchResult = rag.SearchResult
-
-// NewDefaultSearchParam creates a new DefaultSearchParam
-func NewDefaultSearchParam() SearchParam {
-	return rag.NewDefaultSearchParam()
+type Config struct {
+	Type        string
+	Address     string
+	MaxPoolSize int
+	Timeout     time.Duration
 }
 
-// VectorDBConfig holds the configuration for creating a VectorDB
-type VectorDBConfig struct {
-	Type      string
-	Address   string
-	Dimension int
-	Options   map[string]interface{}
-}
+type Option func(*Config)
 
-// VectorDBOption is a function type for configuring VectorDBConfig
-type VectorDBOption func(*VectorDBConfig)
-
-// SetVectorDBType sets the type of vector database
-func SetVectorDBType(dbType string) VectorDBOption {
-	return func(c *VectorDBConfig) {
+func WithType(dbType string) Option {
+	return func(c *Config) {
 		c.Type = dbType
 	}
 }
 
-// SetVectorDBAddress sets the address for the vector database
-func SetVectorDBAddress(address string) VectorDBOption {
-	return func(c *VectorDBConfig) {
+func WithAddress(address string) Option {
+	return func(c *Config) {
 		c.Address = address
 	}
 }
 
-// SetVectorDBDimension sets the dimension for the vector database
-func SetVectorDBDimension(dimension int) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		c.Dimension = dimension
+func WithMaxPoolSize(size int) Option {
+	return func(c *Config) {
+		c.MaxPoolSize = size
 	}
 }
 
-// SetVectorDBOption sets a custom option for the vector database
-func SetVectorDBOption(key string, value interface{}) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		if c.Options == nil {
-			c.Options = make(map[string]interface{})
-		}
-		c.Options[key] = value
+func WithTimeout(timeout time.Duration) Option {
+	return func(c *Config) {
+		c.Timeout = timeout
 	}
 }
 
-// NewVectorDB creates a new VectorDB instance based on the provided configuration
-func NewVectorDB(opts ...VectorDBOption) (VectorDB, error) {
-	config := &VectorDBConfig{
-		Dimension: 1536, // Default dimension
-		Options:   make(map[string]interface{}),
-	}
+func NewVectorDB(opts ...Option) (*VectorDB, error) {
+	cfg := &Config{}
 	for _, opt := range opts {
-		opt(config)
+		opt(cfg)
 	}
-
-	internalDB, err := rag.NewVectorDB(rag.VectorDBConfig{
-		Type:      config.Type,
-		Address:   config.Address,
-		Dimension: config.Dimension,
-		Options:   config.Options,
+	ragDB, err := rag.NewVectorDB(&rag.Config{
+		Type:        cfg.Type,
+		Address:     cfg.Address,
+		MaxPoolSize: cfg.MaxPoolSize,
+		Timeout:     cfg.Timeout,
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	return &vectorDBWrapper{internalDB}, nil
+	return &VectorDB{db: ragDB}, nil
 }
 
-// vectorDBWrapper wraps the internal VectorDB to match the public interface
-type vectorDBWrapper struct {
-	internal rag.VectorDB
+func (vdb *VectorDB) Connect(ctx context.Context) error {
+	return vdb.db.Connect(ctx)
 }
 
-func (w *vectorDBWrapper) SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error {
-	return w.internal.SaveEmbeddings(ctx, collectionName, chunks)
+func (vdb *VectorDB) Close() error {
+	return vdb.db.Close()
 }
 
-func (w *vectorDBWrapper) Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error) {
-	return w.internal.Search(ctx, collectionName, query, limit, param)
+func (vdb *VectorDB) HasCollection(ctx context.Context, name string) (bool, error) {
+	return vdb.db.HasCollection(ctx, name)
 }
 
-func (w *vectorDBWrapper) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error) {
-	return w.internal.HybridSearch(ctx, collectionName, queries, fields, limit, param)
+func (vdb *VectorDB) CreateCollection(ctx context.Context, name string, schema Schema) error {
+	return vdb.db.CreateCollection(ctx, name, rag.Schema(schema))
 }
 
-func (w *vectorDBWrapper) ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error {
-	return w.internal.ValidateQueryFields(ctx, collectionName, queryFields)
+func (vdb *VectorDB) DropCollection(ctx context.Context, name string) error {
+	return vdb.db.DropCollection(ctx, name)
 }
 
-func (w *vectorDBWrapper) Close() error {
-	return w.internal.Close()
+func (vdb *VectorDB) Insert(ctx context.Context, collectionName string, data []Record) error {
+	fmt.Printf("Inserting %d records into collection: %s\n", len(data), collectionName)
+
+	ragRecords := make([]rag.Record, len(data))
+	for i, record := range data {
+		ragRecords[i] = rag.Record(record)
+	}
+	return vdb.db.Insert(ctx, collectionName, ragRecords)
 }
+
+func (vdb *VectorDB) Flush(ctx context.Context, collectionName string) error {
+	return vdb.db.Flush(ctx, collectionName)
+}
+
+func (vdb *VectorDB) CreateIndex(ctx context.Context, collectionName, field string, index Index) error {
+	return vdb.db.CreateIndex(ctx, collectionName, field, rag.Index(index))
+}
+
+func (vdb *VectorDB) LoadCollection(ctx context.Context, name string) error {
+	return vdb.db.LoadCollection(ctx, name)
+}
+
+func (vdb *VectorDB) Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error) {
+	fmt.Printf("Searching in collection %s for top %d results\n", collectionName, topK)
+
+	results, err := vdb.db.Search(ctx, collectionName, rag.Vector(vector), topK)
+	if err != nil {
+		return nil, err
+	}
+	return convertSearchResults(results), nil
+}
+
+func (vdb *VectorDB) HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error) {
+	fmt.Printf("Performing hybrid search in collection %s, field %s for top %d results\n", collectionName, fieldName, topK)
+
+	ragVectors := make([]rag.Vector, len(vectors))
+	for i, v := range vectors {
+		ragVectors[i] = rag.Vector(v)
+	}
+	results, err := vdb.db.HybridSearch(ctx, collectionName, fieldName, ragVectors, topK)
+	if err != nil {
+		return nil, err
+	}
+	return convertSearchResults(results), nil
+}
+
+func convertSearchResults(ragResults []rag.SearchResult) []SearchResult {
+	results := make([]SearchResult, len(ragResults))
+	for i, r := range ragResults {
+		results[i] = SearchResult(r)
+	}
+	return results
+}
+
+func (vdb *VectorDB) SetColumnNames(names []string) {
+	vdb.db.SetColumnNames(names)
+}
+
+// Types to match the internal rag package
+type Schema = rag.Schema
+type Field = rag.Field
+type Record = rag.Record
+type Vector = rag.Vector
+type Index = rag.Index
+type SearchResult = rag.SearchResult
+

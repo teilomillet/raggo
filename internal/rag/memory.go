@@ -1,3 +1,5 @@
+// File: memory.go
+
 package rag
 
 import (
@@ -5,173 +7,169 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 )
 
-type MemoryStore struct {
-	chunks map[string][]EmbeddedChunk
+type MemoryDB struct {
+	collections map[string]*Collection
+	mu          sync.RWMutex
+	columnNames []string
 }
 
-func NewMemoryStore(config VectorDBConfig) (VectorDB, error) {
-	return &MemoryStore{
-		chunks: make(map[string][]EmbeddedChunk),
+type Collection struct {
+	Schema Schema
+	Data   []Record
+}
+
+func newMemoryDB(cfg *Config) (*MemoryDB, error) {
+	return &MemoryDB{
+		collections: make(map[string]*Collection),
 	}, nil
 }
 
-func (m *MemoryStore) SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error {
-	for i := range chunks {
-		for field, vector := range chunks[i].Embeddings {
-			chunks[i].Embeddings[field] = normalizeVector(vector)
-		}
-	}
-	GlobalLogger.Debug("Saving embeddings to MemoryStore", "collectionName", collectionName, "chunkCount", len(chunks))
-	m.chunks[collectionName] = append(m.chunks[collectionName], chunks...)
+func (m *MemoryDB) Connect(ctx context.Context) error {
+	return nil // No-op for in-memory database
+}
+
+func (m *MemoryDB) Close() error {
+	return nil // No-op for in-memory database
+}
+
+func (m *MemoryDB) HasCollection(ctx context.Context, name string) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, exists := m.collections[name]
+	return exists, nil
+}
+
+func (m *MemoryDB) DropCollection(ctx context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.collections, name)
 	return nil
 }
 
-func (m *MemoryStore) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error) {
-	GlobalLogger.Debug("Performing hybrid search in MemoryStore", "collectionName", collectionName, "limit", limit)
-	collection, ok := m.chunks[collectionName]
-	if !ok {
-		GlobalLogger.Warn("Collection not found in MemoryStore", "collectionName", collectionName)
-		return nil, nil
+func (m *MemoryDB) CreateCollection(ctx context.Context, name string, schema Schema) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.collections[name]; exists {
+		return fmt.Errorf("collection %s already exists", name)
+	}
+	m.collections[name] = &Collection{Schema: schema}
+	return nil
+}
+
+func (m *MemoryDB) Insert(ctx context.Context, collectionName string, data []Record) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	collection, exists := m.collections[collectionName]
+	if !exists {
+		return fmt.Errorf("collection %s does not exist", collectionName)
+	}
+	collection.Data = append(collection.Data, data...)
+	return nil
+}
+
+func (m *MemoryDB) Flush(ctx context.Context, collectionName string) error {
+	return nil // No-op for in-memory database
+}
+
+func (m *MemoryDB) CreateIndex(ctx context.Context, collectionName, field string, index Index) error {
+	return nil // No-op for in-memory database, we'll use linear search
+}
+
+func (m *MemoryDB) LoadCollection(ctx context.Context, name string) error {
+	return nil // No-op for in-memory database
+}
+
+func (m *MemoryDB) Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	collection, exists := m.collections[collectionName]
+	if !exists {
+		return nil, fmt.Errorf("collection %s does not exist", collectionName)
 	}
 
-	results := make([]SearchResult, 0, len(collection))
-	for i, chunk := range collection {
-		var totalScore float64
-		for field, query := range queries {
-			if vector, ok := chunk.Embeddings[field]; ok {
-				totalScore += cosineSimilarity(query, vector)
+	var results []SearchResult
+
+	for _, record := range collection.Data {
+		for _, fieldValue := range record.Fields {
+			if v, ok := fieldValue.(Vector); ok {
+				distance := euclideanDistance(vector, v)
+				fields := make(map[string]interface{})
+				for _, name := range m.columnNames {
+					if value, exists := record.Fields[name]; exists {
+						fields[name] = value
+					}
+				}
+				results = append(results, SearchResult{
+					ID:     record.Fields["ID"].(int64),
+					Score:  distance,
+					Fields: fields,
+				})
+				break
 			}
 		}
-		averageScore := totalScore / float64(len(queries))
-
-		// Prepare the Fields map
-		resultFields := make(map[string]interface{})
-		for _, field := range fields {
-			if value, ok := chunk.Metadata[field]; ok {
-				resultFields[field] = value
-			}
-		}
-
-		results = append(results, SearchResult{
-			ID:       int64(i),
-			Text:     chunk.Text,
-			Score:    averageScore,
-			Metadata: chunk.Metadata,
-			Fields:   resultFields,
-		})
-	}
-
+	} // Sort results by score
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+		return results[i].Score < results[j].Score
 	})
 
-	if len(results) > limit {
-		results = results[:limit]
+	// Trim to topK
+	if len(results) > topK {
+		results = results[:topK]
 	}
 
-	GlobalLogger.Debug("Hybrid search completed", "resultCount", len(results))
 	return results, nil
 }
 
-func (m *MemoryStore) Search(ctx context.Context, collectionName string, query []float64, topK int, param SearchParam) ([]SearchResult, error) {
-	GlobalLogger.Debug("Searching in MemoryStore", "collectionName", collectionName, "topK", topK)
-	collection, ok := m.chunks[collectionName]
-	if !ok {
-		GlobalLogger.Warn("Collection not found in MemoryStore", "collectionName", collectionName)
-		return nil, nil
+func (m *MemoryDB) HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	collection, exists := m.collections[collectionName]
+	if !exists {
+		return nil, fmt.Errorf("collection %s does not exist", collectionName)
 	}
 
-	results := make([]SearchResult, 0, len(collection))
-	for i, chunk := range collection {
-		// Assume the first embedding is the default one for single-vector search
-		defaultEmbedding := chunk.Embeddings["default"]
-		score := cosineSimilarity(query, defaultEmbedding)
-		results = append(results, SearchResult{
-			ID:       int64(i),
-			Text:     chunk.Text,
-			Score:    score,
-			Metadata: chunk.Metadata,
-			Fields:   make(map[string]interface{}), // Add an empty Fields map for consistency
-		})
+	var results []SearchResult
+	for _, record := range collection.Data {
+		var totalDistance float64
+		if v, ok := record.Fields[fieldName].(Vector); ok {
+			for _, vector := range vectors {
+				totalDistance += euclideanDistance(vector, v)
+			}
+			fields := make(map[string]interface{})
+			for _, name := range m.columnNames {
+				if value, exists := record.Fields[name]; exists {
+					fields[name] = value
+				}
+			}
+			results = append(results, SearchResult{
+				ID:     record.Fields["ID"].(int64),
+				Score:  totalDistance / float64(len(vectors)),
+				Fields: fields,
+			})
+		}
 	}
-
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+		return results[i].Score < results[j].Score
 	})
 
 	if len(results) > topK {
 		results = results[:topK]
 	}
 
-	GlobalLogger.Debug("Search completed", "resultCount", len(results))
 	return results, nil
 }
-
-func (m *MemoryStore) ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error {
-	collection, ok := m.chunks[collectionName]
-	if !ok {
-		return fmt.Errorf("collection '%s' not found", collectionName)
-	}
-
-	if len(collection) == 0 {
-		return fmt.Errorf("collection '%s' is empty", collectionName)
-	}
-
-	// Check the first chunk to validate fields
-	firstChunk := collection[0]
-	for _, field := range queryFields {
-		if _, ok := firstChunk.Embeddings[field]; !ok {
-			return fmt.Errorf("field '%s' not found in collection '%s'", field, collectionName)
-		}
-	}
-
-	return nil
-}
-
-func normalizeVector(vector []float64) []float64 {
+func euclideanDistance(a, b Vector) float64 {
 	var sum float64
-	for _, v := range vector {
-		sum += v * v
-	}
-	magnitude := math.Sqrt(sum)
-	if magnitude == 0 {
-		return vector // Avoid division by zero
-	}
-	normalized := make([]float64, len(vector))
-	for i, v := range vector {
-		normalized[i] = v / magnitude
-	}
-	return normalized
-}
-
-func innerProduct(a, b []float64) float64 {
-	sum := 0.0
 	for i := range a {
-		sum += a[i] * b[i]
+		diff := a[i] - b[i]
+		sum += diff * diff
 	}
-	return sum
+	return math.Sqrt(sum)
 }
 
-func (m *MemoryStore) Close() error {
-	GlobalLogger.Debug("Closing MemoryStore")
-	m.chunks = nil
-	return nil
-}
-
-func cosineSimilarity(a, b []float64) float64 {
-	dotProduct := 0.0
-	normA := 0.0
-	normB := 0.0
-	for i := range a {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
-}
-
-func init() {
-	RegisterVectorDB("memory", NewMemoryStore)
+func (m *MemoryDB) SetColumnNames(names []string) {
+	m.columnNames = names
 }

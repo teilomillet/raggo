@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/teilomillet/raggo"
 )
@@ -13,6 +14,8 @@ import (
 func main() {
 	// Set log level to Debug for more detailed output
 	raggo.SetLogLevel(raggo.LogLevelDebug)
+
+	textStorage := make(map[int64]string)
 
 	// Create a new Parser
 	parser := raggo.NewParser()
@@ -69,120 +72,146 @@ func main() {
 
 	fmt.Printf("Successfully embedded %d chunks\n", len(embeddedChunks))
 
-	// Create VectorDB instances for memory, Milvus with L2, and Milvus with IP
-	memoryDB, err := raggo.NewVectorDB(
-		raggo.SetVectorDBType("memory"),
-		raggo.SetVectorDBDimension(1536),
+	// Create Milvus VectorDB instance
+	milvusDB, err := raggo.NewVectorDB(
+		raggo.WithType("milvus"),
+		raggo.WithAddress("localhost:19530"),
+		raggo.WithMaxPoolSize(10),
+		raggo.WithTimeout(30*time.Second),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create memory vector database: %v", err)
+		log.Fatalf("Failed to create Milvus vector database: %v", err)
 	}
-	defer memoryDB.Close()
+	defer milvusDB.Close()
 
-	milvusDBL2, err := raggo.NewVectorDB(
-		raggo.SetVectorDBType("milvus"),
-		raggo.SetVectorDBAddress("localhost:19530"),
-		raggo.SetVectorDBDimension(1536),
-		raggo.SetVectorDBOption("metric", "L2"),
-		raggo.SetVectorDBOption("index_type", "IVF_FLAT"),
-		raggo.SetVectorDBOption("default_vector_field", "embedding"), // Add this line
-		raggo.SetVectorDBOption("index_params", map[string]interface{}{
-			"nlist": 1024,
-		}),
-		raggo.SetVectorDBOption("search_params", map[string]interface{}{
-			"nprobe": 16,
-		}),
-	)
+	// Connect to the database
+	err = milvusDB.Connect(context.Background())
 	if err != nil {
-		log.Fatalf("Failed to create Milvus L2 vector database: %v", err)
+		log.Fatalf("Failed to connect to Milvus database: %v", err)
 	}
-	defer milvusDBL2.Close()
 
-	milvusDBIP, err := raggo.NewVectorDB(
-		raggo.SetVectorDBType("milvus"),
-		raggo.SetVectorDBAddress("localhost:19530"),
-		raggo.SetVectorDBDimension(1536),
-		raggo.SetVectorDBOption("metric", "IP"),
-		raggo.SetVectorDBOption("index_type", "IVF_FLAT"),
-		raggo.SetVectorDBOption("index_params", map[string]interface{}{
-			"nlist": 1024,
-		}),
-		raggo.SetVectorDBOption("search_params", map[string]interface{}{
-			"nprobe": 16,
-		}),
-	)
+	// Create collection
+	collectionName := "test_collection_hybrid"
+	schema := raggo.Schema{
+		Name: collectionName,
+		Fields: []raggo.Field{
+			{Name: "ID", DataType: "int64", PrimaryKey: true, AutoID: false},
+			{Name: "Embedding", DataType: "float_vector", Dimension: 1536},
+		},
+	}
+	log.Printf("Created collection %s with schema: %+v", collectionName, schema)
+
+	exists, err := milvusDB.HasCollection(context.Background(), collectionName)
 	if err != nil {
-		log.Fatalf("Failed to create Milvus IP vector database: %v", err)
+		log.Fatalf("Failed to check if collection exists: %v", err)
 	}
-	defer milvusDBIP.Close()
-	// Save embeddings to all databases
-	collectionName := "test_collection"
-	err = memoryDB.SaveEmbeddings(context.Background(), collectionName, embeddedChunks)
-	if err != nil {
-		log.Fatalf("Failed to save embeddings to memory database: %v", err)
-	}
-
-	err = milvusDBL2.SaveEmbeddings(context.Background(), collectionName+"_l2", embeddedChunks)
-	if err != nil {
-		log.Fatalf("Failed to save embeddings to Milvus L2 database: %v", err)
-	}
-
-	err = milvusDBIP.SaveEmbeddings(context.Background(), collectionName+"_ip", embeddedChunks)
-	if err != nil {
-		log.Fatalf("Failed to save embeddings to Milvus IP database: %v", err)
-	}
-
-	// Perform a search using all databases
-	query := embeddedChunks[0].Embeddings["default"] // Use the default embedding
-	limit := 5
-	searchParam := raggo.NewDefaultSearchParam()
-
-	memoryResults, err := memoryDB.Search(context.Background(), collectionName, query, limit, searchParam)
-	if err != nil {
-		log.Fatalf("Failed to search memory database: %v", err)
-	}
-
-	milvusL2Results, err := milvusDBL2.Search(context.Background(), collectionName+"_l2", query, limit, searchParam)
-	if err != nil {
-		log.Fatalf("Failed to search Milvus L2 database: %v", err)
-	}
-
-	milvusIPResults, err := milvusDBIP.Search(context.Background(), collectionName+"_ip", query, limit, searchParam)
-	if err != nil {
-		log.Fatalf("Failed to search Milvus IP database: %v", err)
-	}
-
-	// Compare results
-	fmt.Println("\nMemory Search Results:")
-	printResults(memoryResults)
-
-	fmt.Println("\nMilvus L2 Search Results:")
-	printResults(milvusL2Results)
-
-	fmt.Println("\nMilvus IP Search Results:")
-	printResults(milvusIPResults)
-
-	compareResults(memoryResults, milvusL2Results, milvusIPResults)
-}
-
-func compareResults(memoryResults, milvusL2Results, milvusIPResults []raggo.SearchResult) {
-
-	fmt.Println("\nComparing Memory, Milvus L2, and Milvus IP results:")
-	for i := 0; i < len(memoryResults) && i < len(milvusL2Results) && i < len(milvusIPResults); i++ {
-		memoryResult := memoryResults[i]
-		milvusL2Result := milvusL2Results[i]
-		milvusIPResult := milvusIPResults[i]
-		fmt.Printf("%d. Memory: (Score: %.4f, ID: %v), Milvus L2: (Score: %.4f, ID: %v), Milvus IP: (Score: %.4f, ID: %v)\n",
-			i+1, memoryResult.Score, memoryResult.ID, milvusL2Result.Score, milvusL2Result.ID, milvusIPResult.Score, milvusIPResult.ID)
-		if memoryResult.ID != milvusL2Result.ID || memoryResult.ID != milvusIPResult.ID {
-			fmt.Println("   *** Results differ ***")
+	if exists {
+		err = milvusDB.DropCollection(context.Background(), collectionName)
+		if err != nil {
+			log.Fatalf("Failed to drop existing collection: %v", err)
 		}
+		log.Printf("Dropped existing collection %s\n", collectionName)
 	}
-}
 
-func printResults(results []raggo.SearchResult) {
-	for i, result := range results {
-		fmt.Printf("%d. Score: %f, Text: %s\n", i+1, result.Score, truncateString(result.Text, 50))
+	err = milvusDB.CreateCollection(context.Background(), collectionName, schema)
+	if err != nil {
+		log.Fatalf("Failed to create collection: %v", err)
+	}
+
+	// Insert embeddings
+	var records []raggo.Record
+	for i, chunk := range embeddedChunks {
+		id := int64(i)
+		records = append(records, raggo.Record{
+			Fields: map[string]interface{}{
+				"ID":        id,
+				"Embedding": chunk.Embeddings["default"],
+			},
+		})
+		textStorage[id] = chunk.Text
+		log.Printf("Stored text for ID %d: %s", id, truncateString(chunk.Text, 50))
+	}
+
+	// Insert the records into Milvus
+	err = milvusDB.Insert(context.Background(), collectionName, records)
+	if err != nil {
+		log.Fatalf("Failed to insert records: %v", err)
+	}
+
+	// for i, record := range records {
+	// 	log.Printf("Record %d: %+v", i, record)
+	// }
+
+	// Flush the inserted data
+	err = milvusDB.Flush(context.Background(), collectionName)
+	if err != nil {
+		log.Fatalf("Failed to flush data: %v", err)
+	}
+
+	// Create index
+	index := raggo.Index{
+		Type:   "HNSW",
+		Metric: "L2",
+		Parameters: map[string]interface{}{
+			"M":              16,
+			"efConstruction": 256,
+		},
+	}
+	// Create index on Embedding field
+	err = milvusDB.CreateIndex(context.Background(), collectionName, "Embedding", index)
+	if err != nil {
+		log.Fatalf("Failed to create index on Embedding: %v", err)
+	}
+
+	// Load collection
+	err = milvusDB.LoadCollection(context.Background(), collectionName)
+	if err != nil {
+		log.Fatalf("Failed to load collection: %v", err)
+	}
+
+	log.Printf("Performing search with %d embedded chunks", len(embeddedChunks))
+	log.Printf("Text storage contents:")
+	for id, text := range textStorage {
+		log.Printf("ID %d: %s", id, truncateString(text, 50))
+	}
+
+	// Perform a hybrid search
+	var hybridResults []raggo.SearchResult
+
+	if len(embeddedChunks) > 1 {
+		query1 := embeddedChunks[0].Embeddings["default"]
+		query2 := embeddedChunks[1].Embeddings["default"]
+		topK := 5
+
+		hybridResults, err = milvusDB.HybridSearch(context.Background(), collectionName, []raggo.Vector{query1, query2}, topK)
+	} else if len(embeddedChunks) == 1 {
+		query := embeddedChunks[0].Embeddings["default"]
+		topK := 5
+
+		hybridResults, err = milvusDB.Search(context.Background(), collectionName, query, topK)
+	} else {
+		log.Fatalf("No embedded chunks to search with")
+	}
+
+	if err != nil {
+		log.Fatalf("Failed to perform search: %v", err)
+	}
+
+	log.Printf("Search returned %d results", len(hybridResults))
+
+	// Print search results
+	fmt.Println("\nMilvus Search Results:")
+	if len(hybridResults) == 0 {
+		fmt.Println("No results found.")
+	} else {
+		for i, result := range hybridResults {
+			text, ok := textStorage[result.ID]
+			if !ok {
+				log.Printf("Text not found for ID %d", result.ID)
+			}
+			log.Printf("Result %d: ID=%d, Score=%f, Text found: %v", i, result.ID, result.Score, ok)
+			fmt.Printf("%d. Score: %f, Text: %s\n", i+1, result.Score, truncateString(text, 50))
+		}
 	}
 }
 
@@ -192,3 +221,4 @@ func truncateString(s string, length int) string {
 	}
 	return s[:length-3] + "..."
 }
+
