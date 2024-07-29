@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +34,6 @@ type ResumeInfo struct {
 }
 
 func main() {
-
 	// Set log level to Debug for more detailed output
 	raggo.SetLogLevel(raggo.LogLevelWarn)
 
@@ -71,14 +69,26 @@ func main() {
 
 	embeddingService := raggo.NewEmbeddingService(embedder)
 
-	vectorDB, err := raggo.NewVectorDB(
-		raggo.SetVectorDBType("memory"),
-		raggo.SetVectorDBDimension(1536),
+	// Initialize InMemory VectorDBManager
+	inMemoryManager, err := raggo.NewVectorDBManager("memory",
+		raggo.WithDimension(1536),
+		raggo.WithTopK(5),
 	)
 	if err != nil {
-		log.Fatalf("Failed to create vector database: %v", err)
+		log.Fatalf("Failed to create InMemory VectorDBManager: %v", err)
 	}
-	defer vectorDB.Close()
+	defer inMemoryManager.Close()
+
+	// Initialize Milvus VectorDBManager
+	milvusManager, err := raggo.NewVectorDBManager("milvus",
+		raggo.WithAddress("localhost:19530"),
+		raggo.WithDimension(1536),
+		raggo.WithTopK(5),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create Milvus VectorDBManager: %v", err)
+	}
+	defer milvusManager.Close()
 
 	// Get the current working directory
 	wd, err := os.Getwd()
@@ -90,35 +100,55 @@ func main() {
 	resumeDir := filepath.Join(wd, "testdata")
 	log.Printf("Processing resumes from directory: %s", resumeDir)
 
-	// Process resumes
-	err = processResumes(llm, parser, chunker, embeddingService, vectorDB, resumeDir)
+	// Process resumes for both databases
+	err = processResumes(llm, parser, chunker, embeddingService, inMemoryManager, resumeDir)
 	if err != nil {
-		log.Fatalf("Failed to process resumes: %v", err)
+		log.Fatalf("Failed to process resumes for InMemory DB: %v", err)
+	}
+
+	err = processResumes(llm, parser, chunker, embeddingService, milvusManager, resumeDir)
+	if err != nil {
+		log.Fatalf("Failed to process resumes for Milvus DB: %v", err)
 	}
 
 	// Job offer
 	jobOffer := "We are looking for a software engineer with 5+ years of experience in Go, distributed systems, and cloud technologies. The ideal candidate should have strong problem-solving skills and experience with Docker and Kubernetes."
 
-	// Perform normal vector search
-	fmt.Println("\nPerforming normal vector search:")
-	candidates, err := searchCandidates(context.Background(), llm, embeddingService, vectorDB, jobOffer)
-	if err != nil {
-		log.Fatalf("Failed to search candidates: %v", err)
-	}
+	// Perform searches for both databases
+	fmt.Println("\nPerforming searches on InMemory DB:")
+	performSearches(llm, embeddingService, inMemoryManager, jobOffer)
 
-	printCandidates(candidates)
-
-	// Perform hybrid search
-	fmt.Println("\nPerforming hybrid search:")
-	hybridCandidates, err := hybridSearchCandidates(context.Background(), llm, embeddingService, vectorDB, jobOffer)
-	if err != nil {
-		log.Fatalf("Failed to perform hybrid search for candidates: %v", err)
-	}
-
-	printCandidates(hybridCandidates)
+	fmt.Println("\nPerforming searches on Milvus DB:")
+	performSearches(llm, embeddingService, milvusManager, jobOffer)
 }
 
-func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, resumeDir string) error {
+func performSearches(llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDBManager *raggo.VectorDBManager, jobOffer string) {
+	// Perform normal vector search
+	fmt.Println("Normal vector search:")
+	candidates, err := searchCandidates(context.Background(), llm, embeddingService, vectorDBManager, jobOffer)
+	if err != nil {
+		log.Printf("Failed to search candidates: %v", err)
+	} else {
+		printCandidates(candidates)
+	}
+
+	// Perform hybrid search
+	fmt.Println("\nHybrid search:")
+	hybridCandidates, err := hybridSearchCandidates(context.Background(), llm, embeddingService, vectorDBManager, jobOffer)
+	if err != nil {
+		log.Printf("Failed to perform hybrid search for candidates: %v", err)
+	} else {
+		printCandidates(hybridCandidates)
+	}
+}
+
+func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDBManager *raggo.VectorDBManager, resumeDir string) error {
+	// Ensure the 'resumes' collection exists
+	err := vectorDBManager.EnsureCollection("resumes")
+	if err != nil {
+		return fmt.Errorf("failed to ensure 'resumes' collection: %w", err)
+	}
+
 	files, err := filepath.Glob(filepath.Join(resumeDir, "*.pdf"))
 	if err != nil {
 		return fmt.Errorf("failed to list resume files: %w", err)
@@ -141,10 +171,10 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 		wg.Add(1)
 		go func(file string) {
 			defer wg.Done()
-			semaphore <- struct{}{}        // Acquire semaphore
-			defer func() { <-semaphore }() // Release semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
 
-			err := processResume(file, llm, parser, chunker, embeddingService, vectorDB, cacheDir)
+			err := processResume(file, llm, parser, chunker, embeddingService, vectorDBManager, cacheDir)
 			if err != nil {
 				log.Printf("Error processing resume %s: %v", file, err)
 			}
@@ -153,20 +183,10 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 
 	wg.Wait()
 
-	// Count total items in the collection
-	if counter, ok := vectorDB.(interface{ Count(string) (int, error) }); ok {
-		count, err := counter.Count("resumes")
-		if err != nil {
-			log.Printf("Failed to get collection item count: %v", err)
-		} else {
-			log.Printf("Total items in 'resumes' collection: %d", count)
-		}
-	}
-
 	return nil
 }
 
-func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, cacheDir string) error {
+func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDBManager *raggo.VectorDBManager, cacheDir string) error {
 	log.Printf("Processing resume: %s", file)
 
 	cacheFile := filepath.Join(cacheDir, filepath.Base(file)+".cache")
@@ -236,36 +256,20 @@ func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo
 		embeddedChunks[i].Metadata["work_experience"] = resumeInfo.WorkExperience
 	}
 
-	log.Printf("Embedded chunks structure for %s:", file)
+	// Convert embeddings to float32 and prepare metadata
+	vectors := make([][]float32, len(embeddedChunks))
+	metadata := make([]map[string]interface{}, len(embeddedChunks))
 	for i, chunk := range embeddedChunks {
-		log.Printf("  Chunk %d:", i)
-		log.Printf("    Text: %s", truncateString(chunk.Text, 50))
-		log.Printf("    Metadata: %+v", chunk.Metadata)
-		log.Printf("    Embedding Fields: %v", reflect.ValueOf(chunk.Embeddings).MapKeys())
+		vectors[i] = convertToFloat32(chunk.Embeddings["default"])
+		metadata[i] = chunk.Metadata
 	}
 
 	log.Printf("Saving embeddings for resume: %s", file)
-	err = vectorDB.SaveEmbeddings(context.Background(), "resumes", embeddedChunks)
+	err = vectorDBManager.InsertVectors("resumes", vectors, metadata)
 	if err != nil {
 		return fmt.Errorf("failed to save embeddings: %w", err)
 	}
 	log.Printf("Embeddings saved successfully for resume: %s", file)
-
-	// Add debug logging for database schema
-	if debugDB, ok := vectorDB.(interface {
-		DescribeCollection(string) (map[string]string, error)
-	}); ok {
-		if schema, err := debugDB.DescribeCollection("resumes"); err == nil {
-			log.Printf("Collection 'resumes' schema after saving %s:", file)
-			for field, fieldType := range schema {
-				log.Printf("  %s: %s", field, fieldType)
-			}
-		} else {
-			log.Printf("Failed to describe collection: %v", err)
-		}
-	} else {
-		log.Printf("VectorDB does not support schema description")
-	}
 
 	return nil
 }
@@ -275,8 +279,10 @@ func deduplicateResults(results []raggo.SearchResult) []raggo.SearchResult {
 	deduplicated := []raggo.SearchResult{}
 
 	for _, result := range results {
-		name, ok := result.Fields["name"].(string)
+		name, ok := result.Metadata["name"].(string)
 		if !ok {
+			// If we can't get the name, just include the result
+			deduplicated = append(deduplicated, result)
 			continue
 		}
 		if !seen[name] {
@@ -285,6 +291,7 @@ func deduplicateResults(results []raggo.SearchResult) []raggo.SearchResult {
 		}
 	}
 
+	fmt.Printf("Deduplication: input %d, output %d\n", len(results), len(deduplicated))
 	return deduplicated
 }
 
@@ -355,13 +362,8 @@ Detailed Summary:
 		standardizedSummary)
 }
 
-func getCollectionItemCount(vectorDB raggo.VectorDB, collectionName string) (int, error) {
-	// This is a placeholder. You'll need to implement this based on your VectorDB interface
-	// It should return the number of items in the specified collection
-	return 0, fmt.Errorf("getCollectionItemCount not implemented")
-}
+func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDBManager *raggo.VectorDBManager, jobOffer string) ([]raggo.SearchResult, error) {
 
-func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
 	// Summarize the job offer
 	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
 	if err != nil {
@@ -387,7 +389,7 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 	}
 
 	// Search for matching candidates
-	results, err := vectorDB.Search(ctx, "resumes", jobEmbeddings[0].Embeddings["default"], 5, raggo.NewDefaultSearchParam())
+	results, err := vectorDBManager.Search("resumes", convertToFloat32(jobEmbeddings[0].Embeddings["default"]))
 	if err != nil {
 		return nil, fmt.Errorf("failed to search for candidates: %w", err)
 	}
@@ -395,17 +397,18 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 	return results, nil
 }
 
-func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDBManager *raggo.VectorDBManager, jobOffer string) ([]raggo.SearchResult, error) {
 	// Summarize the job offer
 	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to summarize job offer: %w", err)
 	}
+	fmt.Printf("Job Summary: %s\n", jobSummary)
 
 	// Create a single chunk for the job summary
 	jobChunk := raggo.Chunk{
 		Text:          jobSummary,
-		TokenSize:     len(strings.Split(jobSummary, " ")), // Simple word count as a proxy for token size
+		TokenSize:     len(strings.Split(jobSummary, " ")),
 		StartSentence: 0,
 		EndSentence:   1,
 	}
@@ -419,24 +422,32 @@ func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService 
 	if len(jobEmbeddings) == 0 {
 		return nil, fmt.Errorf("no embeddings generated for job summary")
 	}
+	fmt.Printf("Number of job embeddings: %d\n", len(jobEmbeddings))
 
-	// Prepare queries for hybrid search
-	queries := make(map[string][]float64)
-	for field, embedding := range jobEmbeddings[0].Embeddings {
-		queries[field] = embedding
+	// Convert query vectors to float32
+	queryVectors := make([][]float32, 0)
+	for _, embedding := range jobEmbeddings[0].Embeddings {
+		queryVectors = append(queryVectors, convertToFloat32(embedding))
+	}
+	fmt.Printf("Number of query vectors: %d\n", len(queryVectors))
+
+	// Ensure we have at least two query vectors for hybrid search
+	if len(queryVectors) < 2 {
+		queryVectors = append(queryVectors, queryVectors[0])
 	}
 
-	// Define the fields we want to retrieve
-	fields := []string{"name", "skills", "professional_summary", "work_experience"}
-
-	// Perform hybrid search with an increased limit
-	results, err := vectorDB.HybridSearch(ctx, "resumes", queries, fields, 10, raggo.NewDefaultSearchParam()) // Increased limit to 10
+	results, err := vectorDBManager.HybridSearch("resumes", queryVectors)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform hybrid search for candidates: %w", err)
+	}
+	fmt.Printf("Number of hybrid search results: %d\n", len(results))
+	for i, result := range results {
+		fmt.Printf("Result %d: ID=%d, Score=%f, Name=%v\n", i, result.ID, result.Score, result.Metadata["name"])
 	}
 
 	// Deduplicate results
 	dedupedResults := deduplicateResults(results)
+	fmt.Printf("Number of deduplicated results: %d\n", len(dedupedResults))
 
 	// Limit to top 5 after deduplication
 	if len(dedupedResults) > 5 {
@@ -451,16 +462,16 @@ func printCandidates(candidates []raggo.SearchResult) {
 	for i, candidate := range candidates {
 		fmt.Printf("%d. Score: %.4f\n", i+1, candidate.Score)
 
-		if name, ok := candidate.Fields["name"].(string); ok {
+		if name, ok := candidate.Metadata["name"].(string); ok {
 			fmt.Printf("   Name: %s\n", name)
 		}
-		if skills, ok := candidate.Fields["skills"].([]string); ok {
-			fmt.Printf("   Skills: %s\n", strings.Join(skills, ", "))
+		if skills, ok := candidate.Metadata["skills"].(string); ok {
+			fmt.Printf("   Skills: %s\n", skills)
 		}
-		if summary, ok := candidate.Fields["professional_summary"].(string); ok {
+		if summary, ok := candidate.Metadata["professional_summary"].(string); ok {
 			fmt.Printf("   Professional Summary: %s\n", truncateString(summary, 100))
 		}
-		if experience, ok := candidate.Fields["work_experience"].(string); ok {
+		if experience, ok := candidate.Metadata["work_experience"].(string); ok {
 			fmt.Printf("   Work Experience: %s\n", truncateString(experience, 100))
 		}
 
@@ -473,4 +484,13 @@ func truncateString(s string, maxLength int) string {
 		return s
 	}
 	return s[:maxLength] + "..."
+}
+
+// Add helper function for float64 to float32 conversion
+func convertToFloat32(input []float64) []float32 {
+	output := make([]float32, len(input))
+	for i, v := range input {
+		output[i] = float32(v)
+	}
+	return output
 }

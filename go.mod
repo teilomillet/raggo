@@ -6,6 +6,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20240201131950-da5b75280b06
 	github.com/milvus-io/milvus-sdk-go/v2 v2.4.1
 	github.com/pkoukk/tiktoken-go v0.1.7
+	github.com/teilomillet/goal v0.0.5
 )
 
 require (
@@ -33,7 +34,6 @@ require (
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.4.6 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
-	github.com/teilomillet/goal v0.0.5 // indirect
 	github.com/tidwall/gjson v1.17.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

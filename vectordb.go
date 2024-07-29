@@ -2,117 +2,165 @@ package raggo
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/teilomillet/raggo/internal/rag"
-	_ "github.com/teilomillet/raggo/internal/rag/vectordb"
+	"github.com/teilomillet/raggo/internal/rag/vectordb"
 )
 
-// VectorDB represents a vector database
-type VectorDB interface {
-	SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error
-	Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error)
-	HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error)
-	ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error
-	Close() error
+// VectorDBManager provides a high-level interface for vector database operations
+type VectorDBManager struct {
+	db vectordb.VectorDB
 }
 
-// SearchParam interface for search-related parameters
-type SearchParam = rag.SearchParam
+// SearchResult represents the result of a vector search operation
+type SearchResult = vectordb.SearchResult
 
-// SearchResult represents a single search result
-type SearchResult = rag.SearchResult
-
-// NewDefaultSearchParam creates a new DefaultSearchParam
-func NewDefaultSearchParam() SearchParam {
-	return rag.NewDefaultSearchParam()
-}
-
-// VectorDBConfig holds the configuration for creating a VectorDB
+// VectorDBConfig represents the configuration for the vector database
 type VectorDBConfig struct {
-	Type      string
-	Address   string
-	Dimension int
-	Options   map[string]interface{}
+	DBType     string
+	Address    string
+	Dimension  int
+	IndexType  string
+	MetricType string
+	TopK       int
 }
 
-// VectorDBOption is a function type for configuring VectorDBConfig
-type VectorDBOption func(*VectorDBConfig)
+// ManagerOption is a function that modifies the VectorDBConfig
+type ManagerOption func(*VectorDBConfig)
 
-// SetVectorDBType sets the type of vector database
-func SetVectorDBType(dbType string) VectorDBOption {
-	return func(c *VectorDBConfig) {
-		c.Type = dbType
-	}
-}
-
-// SetVectorDBAddress sets the address for the vector database
-func SetVectorDBAddress(address string) VectorDBOption {
+// WithAddress sets the address for the vector database
+func WithAddress(address string) ManagerOption {
 	return func(c *VectorDBConfig) {
 		c.Address = address
 	}
 }
 
-// SetVectorDBDimension sets the dimension for the vector database
-func SetVectorDBDimension(dimension int) VectorDBOption {
+// WithDimension sets the dimension for the vectors
+func WithDimension(dimension int) ManagerOption {
 	return func(c *VectorDBConfig) {
 		c.Dimension = dimension
 	}
 }
 
-// SetVectorDBOption sets a custom option for the vector database
-func SetVectorDBOption(key string, value interface{}) VectorDBOption {
+// WithIndexType sets the index type for the vector database
+func WithIndexType(indexType string) ManagerOption {
 	return func(c *VectorDBConfig) {
-		if c.Options == nil {
-			c.Options = make(map[string]interface{})
-		}
-		c.Options[key] = value
+		c.IndexType = indexType
 	}
 }
 
-// NewVectorDB creates a new VectorDB instance based on the provided configuration
-func NewVectorDB(opts ...VectorDBOption) (VectorDB, error) {
-	config := &VectorDBConfig{
-		Dimension: 1536, // Default dimension
-		Options:   make(map[string]interface{}),
+// WithMetricType sets the metric type for the vector database
+func WithMetricType(metricType string) ManagerOption {
+	return func(c *VectorDBConfig) {
+		c.MetricType = metricType
 	}
+}
+
+// WithTopK sets the number of top results to return
+func WithTopK(topK int) ManagerOption {
+	return func(c *VectorDBConfig) {
+		c.TopK = topK
+	}
+}
+
+// NewVectorDBManager creates a new VectorDBManager with the specified database type and options
+func NewVectorDBManager(dbType string, opts ...ManagerOption) (*VectorDBManager, error) {
+	config := VectorDBConfig{
+		DBType:     dbType,
+		Dimension:  128, // Default values
+		IndexType:  "HNSW",
+		MetricType: "L2",
+		TopK:       5,
+	}
+
 	for _, opt := range opts {
-		opt(config)
+		opt(&config)
 	}
 
-	internalDB, err := rag.NewVectorDB(rag.VectorDBConfig{
-		Type:      config.Type,
-		Address:   config.Address,
-		Dimension: config.Dimension,
-		Options:   config.Options,
-	})
+	var db vectordb.VectorDB
+
+	switch config.DBType {
+	case "memory":
+		db = &vectordb.InMemoryDB{}
+	case "milvus":
+		db = &vectordb.MilvusDB{}
+	default:
+		return nil, fmt.Errorf("unsupported database type: %s", config.DBType)
+	}
+
+	internalConfig := vectordb.VectorDBConfig{
+		Address:    config.Address,
+		Dimension:  config.Dimension,
+		IndexType:  config.IndexType,
+		MetricType: config.MetricType,
+		TopK:       config.TopK,
+	}
+
+	ctx := context.Background()
+	if err := db.Connect(ctx, internalConfig); err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
+
+	return &VectorDBManager{db: db}, nil
+}
+
+// CreateCollection creates a new collection in the vector database
+func (m *VectorDBManager) CreateCollection(name string) error {
+	ctx := context.Background()
+	return m.db.CreateCollection(ctx, name)
+}
+
+// InsertVectors inserts vectors into the specified collection
+func (m *VectorDBManager) InsertVectors(collectionName string, vectors [][]float32, metadata []map[string]interface{}) error {
+	ctx := context.Background()
+	return m.db.Insert(ctx, collectionName, vectors, metadata)
+}
+
+// Search performs a vector search in the specified collection
+func (m *VectorDBManager) Search(collectionName string, queryVector []float32) ([]vectordb.SearchResult, error) {
+	ctx := context.Background()
+	return m.db.Search(ctx, collectionName, queryVector)
+}
+
+// HybridSearch performs a hybrid search using multiple query vectors
+func (m *VectorDBManager) HybridSearch(collectionName string, queryVectors [][]float32) ([]SearchResult, error) {
+	ctx := context.Background()
+	fmt.Printf("Performing hybrid search with %d query vectors\n", len(queryVectors))
+	results, err := m.db.HybridSearch(ctx, collectionName, queryVectors)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("hybrid search failed: %w", err)
 	}
-
-	return &vectorDBWrapper{internalDB}, nil
+	fmt.Printf("Hybrid search returned %d results\n", len(results))
+	return results, nil
 }
 
-// vectorDBWrapper wraps the internal VectorDB to match the public interface
-type vectorDBWrapper struct {
-	internal rag.VectorDB
+// Close disconnects from the vector database
+func (m *VectorDBManager) Close() error {
+	ctx := context.Background()
+	return m.db.Disconnect(ctx)
 }
 
-func (w *vectorDBWrapper) SaveEmbeddings(ctx context.Context, collectionName string, chunks []EmbeddedChunk) error {
-	return w.internal.SaveEmbeddings(ctx, collectionName, chunks)
+// EnsureCollection creates a collection if it doesn't exist
+func (m *VectorDBManager) EnsureCollection(name string) error {
+	ctx := context.Background()
+	exists, err := m.db.HasCollection(ctx, name)
+	if err != nil {
+		return fmt.Errorf("failed to check collection existence: %w", err)
+	}
+	if !exists {
+		if err := m.db.CreateCollection(ctx, name); err != nil {
+			return fmt.Errorf("failed to create collection: %w", err)
+		}
+		if err := m.db.CreateIndex(ctx, name); err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+	return m.db.LoadCollection(ctx, name)
 }
 
-func (w *vectorDBWrapper) Search(ctx context.Context, collectionName string, query []float64, limit int, param SearchParam) ([]SearchResult, error) {
-	return w.internal.Search(ctx, collectionName, query, limit, param)
+// DeleteCollection drops a collection from the vector database
+func (m *VectorDBManager) DeleteCollection(name string) error {
+	ctx := context.Background()
+	return m.db.DropCollection(ctx, name)
 }
 
-func (w *vectorDBWrapper) HybridSearch(ctx context.Context, collectionName string, queries map[string][]float64, fields []string, limit int, param SearchParam) ([]SearchResult, error) {
-	return w.internal.HybridSearch(ctx, collectionName, queries, fields, limit, param)
-}
-
-func (w *vectorDBWrapper) ValidateQueryFields(ctx context.Context, collectionName string, queryFields []string) error {
-	return w.internal.ValidateQueryFields(ctx, collectionName, queryFields)
-}
-
-func (w *vectorDBWrapper) Close() error {
-	return w.internal.Close()
-}
