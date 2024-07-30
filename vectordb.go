@@ -105,24 +105,20 @@ func (vdb *VectorDB) LoadCollection(ctx context.Context, name string) error {
 	return vdb.db.LoadCollection(ctx, name)
 }
 
-func (vdb *VectorDB) Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error) {
-	fmt.Printf("Searching in collection %s for top %d results\n", collectionName, topK)
+func (vdb *VectorDB) Search(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}) ([]SearchResult, error) {
+	fmt.Printf("Searching in collection %s for top %d results with metric type %s\n", collectionName, topK, metricType)
 
-	results, err := vdb.db.Search(ctx, collectionName, rag.Vector(vector), topK)
+	results, err := vdb.db.Search(ctx, collectionName, vectors, topK, metricType, searchParams)
 	if err != nil {
 		return nil, err
 	}
 	return convertSearchResults(results), nil
 }
 
-func (vdb *VectorDB) HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error) {
-	fmt.Printf("Performing hybrid search in collection %s, field %s for top %d results\n", collectionName, fieldName, topK)
+func (vdb *VectorDB) HybridSearch(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}, reranker interface{}) ([]SearchResult, error) {
+	fmt.Printf("Performing hybrid search in collection %s for top %d results with metric type %s\n", collectionName, topK, metricType)
 
-	ragVectors := make([]rag.Vector, len(vectors))
-	for i, v := range vectors {
-		ragVectors[i] = rag.Vector(v)
-	}
-	results, err := vdb.db.HybridSearch(ctx, collectionName, fieldName, ragVectors, topK)
+	results, err := vdb.db.HybridSearch(ctx, collectionName, vectors, topK, metricType, searchParams, reranker)
 	if err != nil {
 		return nil, err
 	}
@@ -148,4 +144,3 @@ type Record = rag.Record
 type Vector = rag.Vector
 type Index = rag.Index
 type SearchResult = rag.SearchResult
-

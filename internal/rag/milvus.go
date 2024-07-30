@@ -115,14 +115,29 @@ func (m *MilvusDB) LoadCollection(ctx context.Context, name string) error {
 	return m.client.LoadCollection(ctx, name, false)
 }
 
-func (m *MilvusDB) Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error) {
-	sp, _ := entity.NewIndexHNSWSearchParam(30) // Default search param
+func (m *MilvusDB) Search(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}) ([]SearchResult, error) {
+	// Assume we're searching only one field for simplicity
+	var fieldName string
+	var vector Vector
+	for f, v := range vectors {
+		fieldName = f
+		vector = v
+		break
+	}
+
 	floatVector := make([]float32, len(vector))
 	for i, v := range vector {
 		floatVector[i] = float32(v)
 	}
-	result, err := m.client.Search(ctx, collectionName, nil, "", m.columnNames, []entity.Vector{entity.FloatVector(floatVector)},
-		"Embedding", entity.L2, topK, sp)
+
+	sp, err := m.createSearchParam(searchParams)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := m.client.Search(ctx, collectionName, nil, "", m.columnNames,
+		[]entity.Vector{entity.FloatVector(floatVector)},
+		fieldName, m.convertMetricType(metricType), topK, sp)
 	if err != nil {
 		return nil, err
 	}
@@ -130,24 +145,64 @@ func (m *MilvusDB) Search(ctx context.Context, collectionName string, vector Vec
 	return m.wrapSearchResults(result), nil
 }
 
-func (m *MilvusDB) HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error) {
-	sp, _ := entity.NewIndexHNSWSearchParam(30) // Default search param
-	annRequests := make([]*client.ANNSearchRequest, len(vectors))
-	for i, vector := range vectors {
-		floatVector := make([]float32, len(vector))
-		for j, v := range vector {
-			floatVector[j] = float32(v)
-		}
-		annRequests[i] = client.NewANNSearchRequest(fieldName, entity.L2, "", []entity.Vector{entity.FloatVector(floatVector)}, sp, topK)
+func (m *MilvusDB) HybridSearch(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}, reranker interface{}) ([]SearchResult, error) {
+	limit := topK
+	subRequests := make([]*client.ANNSearchRequest, 0, len(vectors))
+
+	sp, err := m.createSearchParam(searchParams)
+	if err != nil {
+		return nil, err
 	}
 
-	result, err := m.client.HybridSearch(ctx, collectionName, nil, topK, m.columnNames,
-		client.NewRRFReranker(), annRequests)
+	for fieldName, vector := range vectors {
+		floatVector := make([]float32, len(vector))
+		for i, v := range vector {
+			floatVector[i] = float32(v)
+		}
+		subRequests = append(subRequests, client.NewANNSearchRequest(fieldName, m.convertMetricType(metricType), "", []entity.Vector{entity.FloatVector(floatVector)}, sp, topK))
+	}
+
+	var milvusReranker client.Reranker
+	if reranker == nil {
+		// Use default reranker if none is provided
+		milvusReranker = client.NewRRFReranker()
+	} else {
+		var ok bool
+		milvusReranker, ok = reranker.(client.Reranker)
+		if !ok {
+			return nil, fmt.Errorf("invalid reranker type")
+		}
+	}
+
+	result, err := m.client.HybridSearch(ctx, collectionName, nil, limit, m.columnNames, milvusReranker, subRequests)
 	if err != nil {
 		return nil, err
 	}
 
 	return m.wrapSearchResults(result), nil
+}
+
+func (m *MilvusDB) createSearchParam(params map[string]interface{}) (entity.SearchParam, error) {
+	if params["type"] == "HNSW" {
+		ef, ok := params["ef"].(int)
+		if !ok {
+			return nil, fmt.Errorf("invalid ef parameter for HNSW search")
+		}
+		return entity.NewIndexHNSWSearchParam(ef)
+	}
+	// Add more search param types as needed
+	return nil, fmt.Errorf("unsupported search param type")
+}
+
+func (m *MilvusDB) convertMetricType(metricType string) entity.MetricType {
+	switch metricType {
+	case "L2":
+		return entity.L2
+	case "IP":
+		return entity.IP
+	default:
+		return entity.L2 // Default to L2 if unknown
+	}
 }
 
 func (m *MilvusDB) convertDataType(dataType string) entity.FieldType {
@@ -160,17 +215,6 @@ func (m *MilvusDB) convertDataType(dataType string) entity.FieldType {
 		return entity.FieldTypeVarChar
 	default:
 		return entity.FieldTypeNone
-	}
-}
-
-func (m *MilvusDB) convertMetricType(metric string) entity.MetricType {
-	switch metric {
-	case "L2":
-		return entity.L2
-	case "IP":
-		return entity.IP
-	default:
-		return entity.L2
 	}
 }
 

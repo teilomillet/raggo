@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -476,7 +477,10 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 
 	// Search for matching candidates
 	debug("Performing search on collection: %s with vector of length %d", "resumes", len(jobEmbeddings[0].Embeddings["default"]))
-	results, err := vectorDB.Search(ctx, "resumes", raggo.Vector(jobEmbeddings[0].Embeddings["default"]), 5)
+	results, err := vectorDB.Search(ctx, "resumes", map[string]raggo.Vector{"Embedding": jobEmbeddings[0].Embeddings["default"]}, 5, "L2", map[string]interface{}{
+		"type": "HNSW",
+		"ef":   100,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to search for candidates: %w", err)
 	}
@@ -486,42 +490,67 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 }
 
 func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
-	fmt.Println("Starting hybrid search for candidates...")
+	fmt.Println("Starting optimized hybrid search for candidates...")
 
-	// Summarize the job offer
-	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
+	// Extract different aspects of the job offer
+	jobAspects, err := extractJobAspects(ctx, llm, jobOffer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to summarize job offer: %w", err)
-	}
-	fmt.Printf("Job summary created: %s\n", truncateString(jobSummary, 100))
-
-	// Create a single chunk for the job summary
-	jobChunk := raggo.Chunk{
-		Text:          jobSummary,
-		TokenSize:     len(strings.Split(jobSummary, " ")),
-		StartSentence: 0,
-		EndSentence:   1,
+		return nil, fmt.Errorf("failed to extract job aspects: %w", err)
 	}
 
-	// Embed the job summary
-	jobEmbeddings, err := embeddingService.EmbedChunks(ctx, []raggo.Chunk{jobChunk})
+	// Create chunks for each job aspect
+	var jobChunks []raggo.Chunk
+	for _, text := range jobAspects {
+		jobChunks = append(jobChunks, raggo.Chunk{
+			Text:          text,
+			TokenSize:     len(strings.Split(text, " ")),
+			StartSentence: 0,
+			EndSentence:   1,
+		})
+	}
+
+	// Embed all job aspects
+	jobEmbeddings, err := embeddingService.EmbedChunks(ctx, jobChunks)
 	if err != nil {
-		return nil, fmt.Errorf("failed to embed job summary: %w", err)
+		return nil, fmt.Errorf("failed to embed job aspects: %w", err)
 	}
 
 	if len(jobEmbeddings) == 0 {
-		return nil, fmt.Errorf("no embeddings generated for job summary")
+		return nil, fmt.Errorf("no embeddings generated for job aspects")
 	}
-	fmt.Println("Job summary embedded successfully")
+	fmt.Printf("Generated %d embeddings for job aspects\n", len(jobEmbeddings))
+
+	// Combine all aspect embeddings into a single vector
+	combinedVector := make(raggo.Vector, len(jobEmbeddings[0].Embeddings["default"]))
+	for _, embedding := range jobEmbeddings {
+		for i, v := range embedding.Embeddings["default"] {
+			combinedVector[i] += v
+		}
+	}
+	// Normalize the combined vector
+	magnitude := 0.0
+	for _, v := range combinedVector {
+		magnitude += v * v
+	}
+	magnitude = math.Sqrt(magnitude)
+	for i := range combinedVector {
+		combinedVector[i] /= magnitude
+	}
+
+	// Prepare search vector
+	searchVectors := map[string]raggo.Vector{
+		"Embedding": combinedVector,
+	}
 
 	// Perform hybrid search
-	fmt.Println("Performing hybrid search...")
-	results, err := vectorDB.HybridSearch(ctx, "resumes", "Embedding", []raggo.Vector{raggo.Vector(jobEmbeddings[0].Embeddings["default"])}, 10)
+	fmt.Println("Performing optimized hybrid search...")
+	results, err := vectorDB.HybridSearch(ctx, "resumes", searchVectors, 10, "L2", map[string]interface{}{
+		"type": "HNSW",
+		"ef":   100,
+	}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform hybrid search for candidates: %w", err)
 	}
-	fmt.Printf("Hybrid search returned %d results\n", len(results))
-
 	// Deduplicate results
 	dedupedResults := deduplicateResults(results)
 	fmt.Printf("After deduplication: %d results\n", len(dedupedResults))
@@ -533,6 +562,34 @@ func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService 
 	}
 
 	return dedupedResults, nil
+}
+
+func extractJobAspects(ctx context.Context, llm goal.LLM, jobOffer string) (map[string]string, error) {
+	prompt := goal.NewPrompt(`
+	Extract and summarize the following aspects from the job offer:
+	1. Required Skills
+	2. Experience Level
+	3. Job Responsibilities
+	4. Company Culture
+
+	For each aspect, provide a brief summary (1-2 sentences).
+	Respond with a JSON object where the keys are the aspect names and the values are the summaries.
+
+	Job Offer:
+	` + jobOffer)
+
+	aspectsJSON, err := llm.Generate(ctx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate job aspects: %w", err)
+	}
+
+	var aspects map[string]string
+	err = json.Unmarshal([]byte(aspectsJSON), &aspects)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse job aspects: %w", err)
+	}
+
+	return aspects, nil
 }
 
 func printCandidates(candidates []raggo.SearchResult) {
@@ -561,4 +618,3 @@ func truncateString(s string, maxLength int) string {
 	}
 	return s[:maxLength]
 }
-

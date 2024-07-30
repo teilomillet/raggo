@@ -72,6 +72,8 @@ func main() {
 
 	fmt.Printf("Successfully embedded %d chunks\n", len(embeddedChunks))
 
+	log.Println("About to create Milvus VectorDB instance")
+
 	// Create Milvus VectorDB instance
 	milvusDB, err := raggo.NewVectorDB(
 		raggo.WithType("milvus"),
@@ -82,13 +84,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Milvus vector database: %v", err)
 	}
-	defer milvusDB.Close()
+	log.Println("Successfully created Milvus VectorDB instance")
 
-	// Connect to the database
-	err = milvusDB.Connect(context.Background())
+	defer func() {
+		log.Println("Attempting to close Milvus connection")
+		err := milvusDB.Close()
+		if err != nil {
+			log.Printf("Error closing Milvus connection: %v", err)
+		} else {
+			log.Println("Successfully closed Milvus connection")
+		}
+	}()
+
+	log.Println("Attempting to connect to Milvus database")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err = milvusDB.Connect(ctx)
 	if err != nil {
 		log.Fatalf("Failed to connect to Milvus database: %v", err)
 	}
+	log.Println("Successfully connected to Milvus database")
 
 	// Create collection
 	collectionName := "test_collection_hybrid"
@@ -100,24 +116,33 @@ func main() {
 			{Name: "Text", DataType: "varchar", MaxLength: 65535},
 		},
 	}
-	log.Printf("Created collection %s with schema: %+v", collectionName, schema)
+	log.Printf("Attempting to create collection %s with schema: %+v", collectionName, schema)
 
-	exists, err := milvusDB.HasCollection(context.Background(), collectionName)
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	exists, err := milvusDB.HasCollection(ctx, collectionName)
 	if err != nil {
 		log.Fatalf("Failed to check if collection exists: %v", err)
 	}
+	log.Printf("Collection %s exists: %v", collectionName, exists)
+
 	if exists {
-		err = milvusDB.DropCollection(context.Background(), collectionName)
+		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = milvusDB.DropCollection(ctx, collectionName)
 		if err != nil {
 			log.Fatalf("Failed to drop existing collection: %v", err)
 		}
 		log.Printf("Dropped existing collection %s\n", collectionName)
 	}
 
-	err = milvusDB.CreateCollection(context.Background(), collectionName, schema)
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err = milvusDB.CreateCollection(ctx, collectionName, schema)
 	if err != nil {
 		log.Fatalf("Failed to create collection: %v", err)
 	}
+	log.Printf("Successfully created collection %s", collectionName)
 
 	// Insert embeddings
 	var records []raggo.Record
@@ -130,6 +155,7 @@ func main() {
 				"Text":      chunk.Text,
 			},
 		})
+		textStorage[id] = chunk.Text
 		log.Printf("Stored text for ID %d: %s", id, truncateString(chunk.Text, 50))
 	}
 
@@ -179,10 +205,14 @@ func main() {
 	var searchResults []raggo.SearchResult
 
 	if len(embeddedChunks) > 0 {
-		query := embeddedChunks[0].Embeddings["default"]
+		query := map[string]raggo.Vector{"Embedding": embeddedChunks[0].Embeddings["default"]}
 		topK := 5
+		searchParams := map[string]interface{}{
+			"type": "HNSW",
+			"ef":   64, // You might need to adjust this value
+		}
 
-		searchResults, err = milvusDB.Search(context.Background(), collectionName, query, topK)
+		searchResults, err = milvusDB.Search(context.Background(), collectionName, query, topK, "L2", searchParams)
 		if err != nil {
 			log.Fatalf("Failed to perform regular search: %v", err)
 		}
@@ -207,11 +237,13 @@ func main() {
 		var hybridResults []raggo.SearchResult
 
 		if len(embeddedChunks) > 1 {
-			query1 := embeddedChunks[0].Embeddings["default"]
-			query2 := embeddedChunks[1].Embeddings["default"]
+			query := map[string]raggo.Vector{
+				"Embedding1": embeddedChunks[0].Embeddings["default"],
+				"Embedding2": embeddedChunks[1].Embeddings["default"],
+			}
 			topK := 5
 
-			hybridResults, err = milvusDB.HybridSearch(context.Background(), collectionName, "Embedding", []raggo.Vector{query1, query2}, topK)
+			hybridResults, err = milvusDB.HybridSearch(context.Background(), collectionName, query, topK, "L2", nil, nil)
 			if err != nil {
 				log.Fatalf("Failed to perform hybrid search: %v", err)
 			}

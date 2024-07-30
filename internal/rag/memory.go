@@ -82,9 +82,9 @@ func (m *MemoryDB) LoadCollection(ctx context.Context, name string) error {
 	return nil // No-op for in-memory database
 }
 
-func (m *MemoryDB) Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (m *MemoryDB) Search(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}) ([]SearchResult, error) {
+	// The implementation remains largely the same, but now we can use metricType and searchParams
+	// For simplicity, we'll ignore these new parameters in this example
 	collection, exists := m.collections[collectionName]
 	if !exists {
 		return nil, fmt.Errorf("collection %s does not exist", collectionName)
@@ -93,9 +93,9 @@ func (m *MemoryDB) Search(ctx context.Context, collectionName string, vector Vec
 	var results []SearchResult
 
 	for _, record := range collection.Data {
-		for _, fieldValue := range record.Fields {
-			if v, ok := fieldValue.(Vector); ok {
-				distance := euclideanDistance(vector, v)
+		for fieldName, searchVector := range vectors {
+			if v, ok := record.Fields[fieldName].(Vector); ok {
+				distance := m.calculateDistance(searchVector, v, metricType)
 				fields := make(map[string]interface{})
 				for _, name := range m.columnNames {
 					if value, exists := record.Fields[name]; exists {
@@ -110,12 +110,12 @@ func (m *MemoryDB) Search(ctx context.Context, collectionName string, vector Vec
 				break
 			}
 		}
-	} // Sort results by score
+	}
+
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score < results[j].Score
 	})
 
-	// Trim to topK
 	if len(results) > topK {
 		results = results[:topK]
 	}
@@ -123,9 +123,9 @@ func (m *MemoryDB) Search(ctx context.Context, collectionName string, vector Vec
 	return results, nil
 }
 
-func (m *MemoryDB) HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (m *MemoryDB) HybridSearch(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}, reranker interface{}) ([]SearchResult, error) {
+	// The implementation remains largely the same, but now we can use metricType, searchParams, and reranker
+	// For simplicity, we'll ignore these new parameters in this example
 	collection, exists := m.collections[collectionName]
 	if !exists {
 		return nil, fmt.Errorf("collection %s does not exist", collectionName)
@@ -134,10 +134,15 @@ func (m *MemoryDB) HybridSearch(ctx context.Context, collectionName string, fiel
 	var results []SearchResult
 	for _, record := range collection.Data {
 		var totalDistance float64
-		if v, ok := record.Fields[fieldName].(Vector); ok {
-			for _, vector := range vectors {
-				totalDistance += euclideanDistance(vector, v)
+		var fieldsMatched int
+		for fieldName, searchVector := range vectors {
+			if v, ok := record.Fields[fieldName].(Vector); ok {
+				totalDistance += m.calculateDistance(searchVector, v, metricType)
+				fieldsMatched++
 			}
+		}
+
+		if fieldsMatched == len(vectors) {
 			fields := make(map[string]interface{})
 			for _, name := range m.columnNames {
 				if value, exists := record.Fields[name]; exists {
@@ -151,6 +156,7 @@ func (m *MemoryDB) HybridSearch(ctx context.Context, collectionName string, fiel
 			})
 		}
 	}
+
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score < results[j].Score
 	})
@@ -161,6 +167,31 @@ func (m *MemoryDB) HybridSearch(ctx context.Context, collectionName string, fiel
 
 	return results, nil
 }
+
+func (m *MemoryDB) calculateDistance(a, b Vector, metricType string) float64 {
+	var sum float64
+	switch metricType {
+	case "L2":
+		for i := range a {
+			diff := a[i] - b[i]
+			sum += diff * diff
+		}
+		return math.Sqrt(sum)
+	case "IP":
+		for i := range a {
+			sum += a[i] * b[i]
+		}
+		return -sum // Negative because larger IP means closer vectors
+	default:
+		// Default to L2
+		for i := range a {
+			diff := a[i] - b[i]
+			sum += diff * diff
+		}
+		return math.Sqrt(sum)
+	}
+}
+
 func euclideanDistance(a, b Vector) float64 {
 	var sum float64
 	for i := range a {

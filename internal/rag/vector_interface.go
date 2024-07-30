@@ -18,9 +18,14 @@ type VectorDB interface {
 	Flush(ctx context.Context, collectionName string) error
 	CreateIndex(ctx context.Context, collectionName, field string, index Index) error
 	LoadCollection(ctx context.Context, name string) error
-	Search(ctx context.Context, collectionName string, vector Vector, topK int) ([]SearchResult, error)
-	HybridSearch(ctx context.Context, collectionName string, fieldName string, vectors []Vector, topK int) ([]SearchResult, error)
+	Search(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}) ([]SearchResult, error)
+	HybridSearch(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}, reranker interface{}) ([]SearchResult, error)
 	SetColumnNames(names []string)
+}
+
+type SearchParam struct {
+	MetricType string
+	Params     map[string]interface{}
 }
 
 type Schema struct {

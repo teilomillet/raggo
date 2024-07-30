@@ -63,17 +63,17 @@ func main() {
 	// Generate and insert data
 	var records []raggo.Record
 	for i := 0; i < nEntities; i++ {
-		vec1 := make(raggo.Vector, dim)
-		vec2 := make(raggo.Vector, dim)
+		vec1 := make([]float64, dim)
+		vec2 := make([]float64, dim)
 		for j := 0; j < dim; j++ {
-			vec1[j] = rand.Float32()
-			vec2[j] = rand.Float32()
+			vec1[j] = rand.Float64()
+			vec2[j] = rand.Float64()
 		}
 		records = append(records, raggo.Record{
 			Fields: map[string]interface{}{
-				"key":     rand.Int63() % 512,
-				"vector1": vec1,
-				"vector2": vec2,
+				keyCol:        rand.Int63() % 512,
+				embeddingCol1: vec1,
+				embeddingCol2: vec2,
 			},
 		})
 	}
@@ -115,21 +115,28 @@ func main() {
 	}
 
 	log.Println("load collection done")
-
 	// Prepare vectors for hybrid search
-	vec2search1 := records[len(records)-2].Fields[embeddingCol1].(raggo.Vector)
-	vec2search2 := records[len(records)-1].Fields[embeddingCol2].(raggo.Vector)
+	vec2search1 := records[len(records)-2].Fields[embeddingCol1].([]float64)
+	vec2search2 := records[len(records)-1].Fields[embeddingCol2].([]float64)
 
 	begin := time.Now()
 	log.Println("start to execute hybrid search")
-	result, err := db.HybridSearch(ctx, collectionName, []raggo.Vector{vec2search1, vec2search2}, topK)
+	searchVectors := map[string]raggo.Vector{
+		embeddingCol1: vec2search1,
+		embeddingCol2: vec2search2,
+	}
+	result, err := db.HybridSearch(ctx, collectionName, searchVectors, topK, "L2", map[string]interface{}{
+		"type": "HNSW",
+		"ef":   100,
+	}, nil)
 	if err != nil {
 		log.Fatalf("failed to perform hybrid search, err: %v", err)
 	}
-
 	log.Printf("hybrid search `%s` done, latency %v\n", collectionName, time.Since(begin))
 	for _, rs := range result {
-		log.Printf("ID: %d, score %f, embedding1: %v, embedding2: %v\n", rs.ID, rs.Score, rs.Fields[embeddingCol1], rs.Fields[embeddingCol2])
+		log.Printf("ID: %d, score %f, embedding1: %v, embedding2: %v\n",
+			rs.ID, rs.Score,
+			rs.Fields[embeddingCol1], rs.Fields[embeddingCol2])
 	}
 
 	db.DropCollection(ctx, collectionName)
