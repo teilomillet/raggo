@@ -125,6 +125,9 @@ func main() {
 		embeddingCol1: vec2search1,
 		embeddingCol2: vec2search2,
 	}
+
+	db.SetColumnNames([]string{keyCol, embeddingCol1, embeddingCol2})
+
 	result, err := db.HybridSearch(ctx, collectionName, searchVectors, topK, "L2", map[string]interface{}{
 		"type": "HNSW",
 		"ef":   100,
