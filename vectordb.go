@@ -5,8 +5,9 @@ package raggo
 import (
 	"context"
 	"fmt"
-	"github.com/teilomillet/raggo/internal/rag"
 	"time"
+
+	"github.com/teilomillet/raggo/rag"
 )
 
 type VectorDB struct {

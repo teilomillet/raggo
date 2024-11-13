@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/teilomillet/raggo/internal/rag"
-	"github.com/teilomillet/raggo/internal/rag/providers"
+	"github.com/teilomillet/raggo/rag"
+	"github.com/teilomillet/raggo/rag/providers"
 )
 
 // EmbeddedChunk represents a chunk of text with its embeddings and metadata

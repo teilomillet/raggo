@@ -1,7 +1,7 @@
 package raggo
 
 import (
-	"github.com/teilomillet/raggo/internal/rag"
+	"github.com/teilomillet/raggo/rag"
 )
 
 // Chunk represents a piece of text with metadata
@@ -72,4 +72,3 @@ func NewDefaultTokenCounter() TokenCounter {
 func NewTikTokenCounter(encoding string) (TokenCounter, error) {
 	return rag.NewTikTokenCounter(encoding)
 }
-

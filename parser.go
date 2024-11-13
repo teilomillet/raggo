@@ -1,7 +1,7 @@
 package raggo
 
 import (
-	"github.com/teilomillet/raggo/internal/rag"
+	"github.com/teilomillet/raggo/rag"
 )
 
 // Document represents a parsed document

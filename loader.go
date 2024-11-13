@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/teilomillet/raggo/internal/rag"
+	"github.com/teilomillet/raggo/rag"
 )
 
 // Loader represents the main interface for loading files
@@ -54,4 +54,3 @@ func (lw *loaderWrapper) LoadFile(ctx context.Context, path string) (string, err
 func (lw *loaderWrapper) LoadDir(ctx context.Context, dir string) ([]string, error) {
 	return lw.internal.LoadDir(ctx, dir)
 }
-

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/teilomillet/raggo/internal/rag/providers"
+	"github.com/teilomillet/raggo/rag/providers"
 )
 
 // EmbedderConfig holds the configuration for creating an Embedder

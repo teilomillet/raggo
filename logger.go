@@ -1,7 +1,7 @@
 package raggo
 
 import (
-	"github.com/teilomillet/raggo/internal/rag"
+	"github.com/teilomillet/raggo/rag"
 )
 
 // LogLevel represents the severity of a log message

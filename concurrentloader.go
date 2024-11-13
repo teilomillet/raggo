@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/teilomillet/raggo/internal/rag"
+	"github.com/teilomillet/raggo/rag"
 )
 
 // ConcurrentPDFLoader extends the basic Loader interface
