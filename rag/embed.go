@@ -52,16 +52,13 @@ func NewEmbedder(opts ...EmbedderOption) (providers.Embedder, error) {
 	for _, opt := range opts {
 		opt(config)
 	}
-
 	if config.Provider == "" {
 		return nil, fmt.Errorf("provider must be specified")
 	}
-
 	factory, err := providers.GetEmbedderFactory(config.Provider)
 	if err != nil {
 		return nil, err
 	}
-
 	return factory(config.Options)
 }
 
@@ -74,36 +71,55 @@ type EmbeddedChunk struct {
 
 // EmbeddingService handles the embedding process
 type EmbeddingService struct {
-	embedders map[string]providers.Embedder
+	embedder providers.Embedder
 }
 
-// NewEmbeddingService creates a new embedding service
-func NewEmbeddingService(embedders map[string]providers.Embedder) *EmbeddingService {
-	return &EmbeddingService{embedders: embedders}
+// NewEmbeddingService creates a new embedding service with a single embedder
+func NewEmbeddingService(embedder providers.Embedder) *EmbeddingService {
+	return &EmbeddingService{embedder: embedder}
 }
 
 // EmbedChunks embeds a slice of chunks
 func (s *EmbeddingService) EmbedChunks(ctx context.Context, chunks []Chunk) ([]EmbeddedChunk, error) {
 	embeddedChunks := make([]EmbeddedChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		embeddings := make(map[string][]float64)
-		for field, embedder := range s.embedders {
-			embedding, err := embedder.Embed(ctx, chunk.Text)
-			if err != nil {
-				return nil, fmt.Errorf("error embedding chunk for field %s: %w", field, err)
-			}
-			embeddings[field] = embedding
+
+	// Debug output
+	fmt.Printf("Processing %d chunks for embedding\n", len(chunks))
+
+	for i, chunk := range chunks {
+		// Debug output for each chunk
+		fmt.Printf("Processing chunk %d/%d (length: %d)\n", i+1, len(chunks), len(chunk.Text))
+		fmt.Printf("Chunk preview: %s\n", truncateString(chunk.Text, 100))
+
+		embedding, err := s.embedder.Embed(ctx, chunk.Text)
+		if err != nil {
+			return nil, fmt.Errorf("error embedding chunk %d: %w", i+1, err)
 		}
+
 		embeddedChunk := EmbeddedChunk{
-			Text:       chunk.Text,
-			Embeddings: embeddings,
+			Text: chunk.Text,
+			Embeddings: map[string][]float64{
+				"default": embedding,
+			},
 			Metadata: map[string]interface{}{
 				"token_size":     chunk.TokenSize,
 				"start_sentence": chunk.StartSentence,
 				"end_sentence":   chunk.EndSentence,
+				"chunk_index":    i,
 			},
 		}
 		embeddedChunks = append(embeddedChunks, embeddedChunk)
+
+		// Debug output for successful embedding
+		fmt.Printf("Successfully embedded chunk %d (embedding size: %d)\n", i+1, len(embedding))
 	}
+
 	return embeddedChunks, nil
+}
+
+func truncateString(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

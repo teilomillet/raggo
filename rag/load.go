@@ -1,3 +1,4 @@
+// rag/load.go
 package rag
 
 import (
@@ -98,7 +99,7 @@ func (l *Loader) LoadURL(ctx context.Context, url string) (string, error) {
 		return "", err
 	}
 
-	l.logger.Info("Successfully loaded URL", "url", url, "path", destPath)
+	l.logger.Debug("Successfully loaded URL", "url", url, "path", destPath)
 	return destPath, nil
 }
 
@@ -134,7 +135,7 @@ func (l *Loader) LoadFile(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 
-	l.logger.Info("Successfully loaded file", "source", path, "destination", destPath)
+	l.logger.Debug("Successfully loaded file", "source", path, "destination", destPath)
 	return destPath, nil
 }
 
@@ -164,7 +165,6 @@ func (l *Loader) LoadDir(ctx context.Context, dir string) ([]string, error) {
 		return nil, err
 	}
 
-	l.logger.Info("Successfully loaded directory", "dir", dir, "fileCount", len(loadedFiles))
+	l.logger.Debug("Successfully loaded directory", "dir", dir, "fileCount", len(loadedFiles))
 	return loadedFiles, nil
 }
-

@@ -1,0 +1,35 @@
+Vector Databases: A Comprehensive Overview
+
+Vector databases are specialized database systems designed to store and query high-dimensional vectors efficiently. They are crucial for modern machine learning applications, especially in similarity search and recommendation systems.
+
+Key Concepts:
+
+1. Vector Embeddings
+Vectors represent data points in a high-dimensional space. Text, images, or any other data can be converted into vector embeddings using machine learning models.
+
+2. Similarity Search
+Vector databases excel at finding similar items using distance metrics like:
+- Euclidean distance (L2)
+- Cosine similarity
+- Inner product (IP)
+
+3. Indexing Methods
+Common indexing techniques include:
+- HNSW (Hierarchical Navigable Small World)
+- IVF (Inverted File Index)
+- PQ (Product Quantization)
+
+These methods enable fast approximate nearest neighbor (ANN) search in high-dimensional spaces.
+
+4. Popular Vector Database Systems
+- Milvus: Open-source vector database with high performance
+- Pinecone: Cloud-native vector database service
+- Weaviate: Vector search engine with GraphQL API
+- FAISS: Facebook AI Similarity Search library
+
+Use Cases:
+- Semantic search
+- Image similarity
+- Recommendation engines
+- Face recognition
+- Document deduplication

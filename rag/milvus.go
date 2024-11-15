@@ -4,7 +4,9 @@ package rag
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+
 	"github.com/milvus-io/milvus-sdk-go/v2/client"
 	"github.com/milvus-io/milvus-sdk-go/v2/entity"
 )
@@ -24,9 +26,11 @@ func (m *MilvusDB) Connect(ctx context.Context) error {
 		Address: m.config.Address,
 	})
 	if err != nil {
+		GlobalLogger.Error("Failed to connect to Milvus", "error", err)
 		return err
 	}
 	m.client = c
+	GlobalLogger.Debug("Connected to Milvus", "address", m.config.Address)
 	return nil
 }
 
@@ -46,6 +50,7 @@ func (m *MilvusDB) CreateCollection(ctx context.Context, name string, schema Sch
 	milvusSchema := entity.NewSchema().WithName(name).WithDescription(schema.Description)
 	for _, field := range schema.Fields {
 		f := entity.NewField().WithName(field.Name).WithDataType(m.convertDataType(field.DataType))
+
 		if field.PrimaryKey {
 			f.WithIsPrimaryKey(true)
 		}
@@ -55,11 +60,13 @@ func (m *MilvusDB) CreateCollection(ctx context.Context, name string, schema Sch
 		if field.DataType == "float_vector" {
 			f.WithDim(int64(field.Dimension))
 		}
-		if field.DataType == "varchar" {
+		if field.DataType == "varchar" && field.MaxLength > 0 {
 			f.WithMaxLength(int64(field.MaxLength))
 		}
 		milvusSchema.WithField(f)
 	}
+
+	GlobalLogger.Debug("Creating collection", "name", name, "schema", fmt.Sprintf("%+v", milvusSchema))
 	return m.client.CreateCollection(ctx, milvusSchema, entity.DefaultShardNumber)
 }
 
@@ -70,7 +77,7 @@ func (m *MilvusDB) Insert(ctx context.Context, collectionName string, data []Rec
 			if _, ok := columns[fieldName]; !ok {
 				col := m.createColumn(fieldName, fieldValue)
 				columns[fieldName] = col
-				fmt.Printf("Created column for field %s with type %T\n", fieldName, col)
+				GlobalLogger.Debug("Created column", "field", fieldName, "type", fmt.Sprintf("%T", col))
 			}
 			m.appendToColumn(columns[fieldName], fieldValue)
 		}
@@ -79,12 +86,12 @@ func (m *MilvusDB) Insert(ctx context.Context, collectionName string, data []Rec
 	columnList := make([]entity.Column, 0, len(columns))
 	for fieldName, col := range columns {
 		columnList = append(columnList, col)
-		fmt.Printf("Inserting column %s with type %T and %d values\n", fieldName, col, col.Len())
+		GlobalLogger.Debug("Inserting column", "field", fieldName, "type", fmt.Sprintf("%T", col), "values", col.Len())
 	}
 
 	_, err := m.client.Insert(ctx, collectionName, "", columnList...)
 	if err != nil {
-		fmt.Printf("Error inserting data: %v\n", err)
+		GlobalLogger.Error("Failed to insert data", "collection", collectionName, "error", err)
 	}
 	return err
 }
@@ -225,7 +232,11 @@ func (m *MilvusDB) createColumn(fieldName string, fieldValue interface{}) entity
 	case []float64:
 		return entity.NewColumnFloatVector(fieldName, len(v), [][]float32{})
 	case string:
-		return entity.NewColumnVarChar(fieldName, []string{}) // Changed this line
+		return entity.NewColumnVarChar(fieldName, []string{})
+	case map[string]interface{}:
+		// For metadata fields, we just create a varchar column
+		// The actual JSON conversion happens in appendToColumn
+		return entity.NewColumnVarChar(fieldName, []string{})
 	default:
 		panic(fmt.Sprintf("unsupported field type for %s: %T", fieldName, fieldValue))
 	}
@@ -246,7 +257,19 @@ func (m *MilvusDB) appendToColumn(col entity.Column, value interface{}) {
 		}
 		c.AppendValue(floatVector)
 	case *entity.ColumnVarChar:
-		c.AppendValue(value.(string))
+		switch v := value.(type) {
+		case string:
+			c.AppendValue(v)
+		case map[string]interface{}:
+			// Handle metadata by converting to JSON string
+			jsonStr, err := json.Marshal(v)
+			if err != nil {
+				panic(fmt.Sprintf("failed to marshal metadata: %v", err))
+			}
+			c.AppendValue(string(jsonStr))
+		default:
+			panic(fmt.Sprintf("unsupported varchar value type: %T", value))
+		}
 	default:
 		panic(fmt.Sprintf("unsupported column type: %T", col))
 	}

@@ -54,7 +54,7 @@ func (pm *ParserManager) Parse(filePath string) (Document, error) {
 		GlobalLogger.Error("Failed to parse document", "path", filePath, "error", err)
 		return Document{}, err
 	}
-	GlobalLogger.Info("Successfully parsed document", "path", filePath, "type", fileType)
+	GlobalLogger.Debug("Successfully parsed document", "path", filePath, "type", fileType)
 	return doc, nil
 }
 
@@ -79,7 +79,7 @@ func (p *PDFParser) Parse(filePath string) (Document, error) {
 		GlobalLogger.Error("Failed to extract text from PDF", "path", filePath, "error", err)
 		return Document{}, fmt.Errorf("failed to extract text: %w", err)
 	}
-	GlobalLogger.Info("Successfully parsed PDF", "path", filePath)
+	GlobalLogger.Debug("Successfully parsed PDF", "path", filePath)
 	return Document{
 		Content: content,
 		Metadata: map[string]string{
@@ -159,7 +159,7 @@ func (p *TextParser) Parse(filePath string) (Document, error) {
 		GlobalLogger.Error("Failed to read text file", "path", filePath, "error", err)
 		return Document{}, fmt.Errorf("failed to read file: %w", err)
 	}
-	GlobalLogger.Info("Successfully parsed text file", "path", filePath)
+	GlobalLogger.Debug("Successfully parsed text file", "path", filePath)
 	return Document{
 		Content: string(content),
 		Metadata: map[string]string{

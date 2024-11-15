@@ -1,0 +1,37 @@
+Understanding RAG (Retrieval Augmented Generation) Systems
+
+RAG systems combine information retrieval with language model generation to produce more accurate and contextual responses. Here's how they work:
+
+1. Document Processing
+- Documents are split into chunks
+- Each chunk is converted into a vector embedding
+- Embeddings are stored in a vector database
+
+2. Retrieval Process
+When a query is received:
+- Convert query to vector embedding
+- Search vector database for similar content
+- Retrieve most relevant chunks
+
+3. Generation
+- Retrieved context is combined with the original query
+- Large Language Model (LLM) generates response using this context
+- Results are more factual and grounded in source documents
+
+4. Benefits
+- Reduced hallucination in LLM responses
+- Up-to-date information from your document base
+- Source attribution for generated content
+- Lower costs through efficient prompting
+
+5. Common Challenges
+- Choosing optimal chunk sizes
+- Balancing retrieval speed vs accuracy
+- Managing context window limitations
+- Handling document updates efficiently
+
+Best Practices:
+- Regular document updates
+- Careful chunk size selection
+- Quality embeddings generation
+- Proper prompt engineering

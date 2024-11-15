@@ -1,3 +1,5 @@
+// loader.go
+
 package raggo
 
 import (

@@ -87,3 +87,19 @@ func (s *EmbeddingService) EmbedChunks(ctx context.Context, chunks []rag.Chunk) 
 	}
 	return embeddedChunks, nil
 }
+
+func (s *EmbeddingService) Embed(ctx context.Context, text string) ([]float64, error) {
+	// Get the default embedder
+	embedder, ok := s.embedders["default"]
+	if !ok {
+		return nil, fmt.Errorf("no default embedder found")
+	}
+
+	// Get embedding using the default embedder
+	embedding, err := embedder.Embed(ctx, text)
+	if err != nil {
+		return nil, fmt.Errorf("error embedding text: %w", err)
+	}
+
+	return embedding, nil
+}

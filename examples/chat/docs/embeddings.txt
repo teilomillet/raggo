@@ -1,0 +1,39 @@
+Understanding Vector Embeddings in Machine Learning
+
+Vector embeddings are numerical representations of data in a high-dimensional space. They capture semantic relationships and enable efficient similarity comparisons.
+
+Types of Embeddings:
+
+1. Text Embeddings
+- Word embeddings (Word2Vec, GloVe)
+- Sentence embeddings (USE, SBERT)
+- Document embeddings (OpenAI text-embedding-ada-002)
+
+2. Image Embeddings
+- CNN feature vectors
+- CLIP embeddings
+- ResNet features
+
+Properties of Good Embeddings:
+1. Similar items have similar vectors
+2. Relationships are preserved
+3. Meaningful vector operations
+4. Consistent dimensionality
+
+Common Use Cases:
+- Semantic search
+- Document classification
+- Recommendation systems
+- Clustering similar items
+
+Popular Embedding Models:
+- OpenAI Embeddings
+- Cohere Embeddings
+- Hugging Face Models
+- Custom trained models
+
+Best Practices:
+1. Choose appropriate dimension size
+2. Normalize vectors when needed
+3. Use domain-specific models
+4. Regular model updates
