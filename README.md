@@ -1,10 +1,17 @@
 # Raggo
 
-Raggo helps your Go programs answer questions by looking through documents. Think of it as a smart assistant that reads your documents and answers questions about them.
+> A lightweight, production-ready RAG (Retrieval Augmented Generation) library in Go. Built for simplicity and performance with Milvus vector database integration.
+
+<p align="center">
+  <strong>🔍 Search Documents • 💬 Ask Questions • 🤖 Get Smart Answers</strong>
+</p>
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/teilomillet/raggo.svg)](https://pkg.go.dev/github.com/teilomillet/raggo)
 [![Go Report Card](https://goreportcard.com/badge/github.com/teilomillet/raggo)](https://goreportcard.com/report/github.com/teilomillet/raggo)
 [![License](https://img.shields.io/github/license/teilomillet/raggo)](https://github.com/teilomillet/raggo/blob/main/LICENSE)
+
+
+Raggo helps your Go programs answer questions by looking through documents. Think of it as a smart assistant that reads your documents and answers questions about them.
 
 ## Getting Started
 
@@ -155,23 +162,3 @@ Check out our [Advanced Examples](#advanced-examples) to learn more.
 - `process_embedding_benchmark.go`: Performance testing
 - `concurrent_loader_example.go`: Concurrent processing
 - `rate_limiting_example.go`: API rate limiting
-
-## Best Practices
-
-### Production Deployment
-1. Implement proper error handling and retries
-2. Use rate limiting for API calls
-3. Monitor system resources
-4. Implement logging and metrics
-
-### Performance Optimization
-1. Enable concurrent processing
-2. Use batch operations
-3. Implement caching strategies
-4. Monitor and optimize resource usage
-
-### Security
-1. Secure API keys and credentials
-2. Implement proper access controls
-3. Validate and sanitize inputs
-4. Monitor for abuse
