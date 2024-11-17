@@ -200,6 +200,11 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RetrieverResu
 	return results, nil
 }
 
+// GetVectorDB returns the underlying vector database instance
+func (r *Retriever) GetVectorDB() *VectorDB {
+	return r.vectorDB
+}
+
 // Configuration options
 
 func WithRetrieveCollection(name string) RetrieverOption {

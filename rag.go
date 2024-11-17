@@ -85,6 +85,78 @@ func DefaultRAGConfig() *RAGConfig {
 }
 
 // Common options
+func SetProvider(provider string) RAGOption {
+	return func(c *RAGConfig) {
+		c.Provider = provider
+	}
+}
+
+func SetModel(model string) RAGOption {
+	return func(c *RAGConfig) {
+		c.Model = model
+	}
+}
+
+func SetAPIKey(key string) RAGOption {
+	return func(c *RAGConfig) {
+		c.APIKey = key
+	}
+}
+
+func SetCollection(name string) RAGOption {
+	return func(c *RAGConfig) {
+		c.Collection = name
+	}
+}
+
+func SetSearchStrategy(strategy string) RAGOption {
+	return func(c *RAGConfig) {
+		c.UseHybrid = strategy == "hybrid"
+	}
+}
+
+func SetDBAddress(address string) RAGOption {
+	return func(c *RAGConfig) {
+		c.DBAddress = address
+	}
+}
+
+func SetChunkSize(size int) RAGOption {
+	return func(c *RAGConfig) {
+		c.ChunkSize = size
+	}
+}
+
+func SetChunkOverlap(overlap int) RAGOption {
+	return func(c *RAGConfig) {
+		c.ChunkOverlap = overlap
+	}
+}
+
+func SetTopK(k int) RAGOption {
+	return func(c *RAGConfig) {
+		c.TopK = k
+	}
+}
+
+func SetMinScore(score float64) RAGOption {
+	return func(c *RAGConfig) {
+		c.MinScore = score
+	}
+}
+
+func SetTimeout(timeout time.Duration) RAGOption {
+	return func(c *RAGConfig) {
+		c.Timeout = timeout
+	}
+}
+
+func SetDebug(debug bool) RAGOption {
+	return func(c *RAGConfig) {
+		c.Debug = debug
+	}
+}
+
 func WithOpenAI(apiKey string) RAGOption {
 	return func(c *RAGConfig) {
 		c.Provider = "openai"
@@ -147,8 +219,8 @@ func (r *RAG) initialize() error {
 func (r *RAG) LoadDocuments(ctx context.Context, source string) error {
 	loader := NewLoader(SetTempDir(r.config.TempDir))
 	chunker, err := NewChunker(
-		ChunkSize(r.config.ChunkSize), // Changed: use correct option functions
-		ChunkOverlap(r.config.ChunkOverlap),
+		SetChunkSize(r.config.ChunkSize),
+		SetChunkOverlap(r.config.ChunkOverlap),
 	)
 	if err != nil {
 		return err
@@ -297,8 +369,8 @@ func (r *RAG) ProcessWithContext(ctx context.Context, source string, llmModel st
 
 	// Create chunks
 	chunker, _ := NewChunker(
-		ChunkSize(r.config.ChunkSize),
-		ChunkOverlap(r.config.ChunkOverlap),
+		SetChunkSize(r.config.ChunkSize),
+		SetChunkOverlap(r.config.ChunkOverlap),
 	)
 	chunks := chunker.Chunk(doc.Content)
 

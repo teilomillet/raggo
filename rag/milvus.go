@@ -22,15 +22,18 @@ func newMilvusDB(cfg *Config) (*MilvusDB, error) {
 }
 
 func (m *MilvusDB) Connect(ctx context.Context) error {
+	GlobalLogger.Debug("Attempting to connect to Milvus", "address", m.config.Address)
+	
 	c, err := client.NewClient(ctx, client.Config{
 		Address: m.config.Address,
 	})
 	if err != nil {
-		GlobalLogger.Error("Failed to connect to Milvus", "error", err)
-		return err
+		GlobalLogger.Error("Failed to connect to Milvus", "error", err, "address", m.config.Address)
+		return fmt.Errorf("failed to connect to Milvus at %s: %w\nPlease ensure Milvus is running (e.g., with 'docker-compose up -d')", m.config.Address, err)
 	}
+	
 	m.client = c
-	GlobalLogger.Debug("Connected to Milvus", "address", m.config.Address)
+	GlobalLogger.Debug("Successfully connected to Milvus")
 	return nil
 }
 
