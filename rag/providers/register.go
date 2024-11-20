@@ -34,5 +34,9 @@ func GetEmbedderFactory(name string) (EmbedderFactory, error) {
 
 // Embedder interface defines the contract for embedding implementations
 type Embedder interface {
+	// Embed generates embeddings for the given text
 	Embed(ctx context.Context, text string) ([]float64, error)
+
+	// GetDimension returns the dimension of the embeddings for the current model
+	GetDimension() (int, error)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -49,12 +50,8 @@ func defaultConfig() *RegisterConfig {
 		EmbeddingProvider: "openai",
 		EmbeddingModel:    "text-embedding-3-small",
 		EmbeddingKey:      os.Getenv("OPENAI_API_KEY"),
-		OnProgress: func(processed, total int) {
-			Info(fmt.Sprintf("Progress: %d/%d", processed, total))
-		},
-		OnError: func(err error) {
-			Error(fmt.Sprintf("Error: %v", err))
-		},
+		OnProgress:        func(processed, total int) { Debug("Progress", "processed", processed, "total", total) },
+		OnError:          func(err error) { Error("Error during registration", "error", err) },
 	}
 }
 
@@ -70,13 +67,17 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 		opt(cfg)
 	}
 
+	Debug("Initializing registration", "source", source, "config", cfg)
+
 	// Create loader
+	Debug("Creating loader")
 	loader := NewLoader(
 		SetTempDir(cfg.TempDir),
 		SetTimeout(cfg.Timeout),
 	)
 
 	// Create chunker
+	Debug("Creating chunker")
 	chunker, err := NewChunker(
 		ChunkSize(cfg.ChunkSize),
 		ChunkOverlap(cfg.ChunkOverlap),
@@ -86,6 +87,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	}
 
 	// Create embedder
+	Debug("Creating embedder")
 	embedder, err := NewEmbedder(
 		SetProvider(cfg.EmbeddingProvider),
 		SetModel(cfg.EmbeddingModel),
@@ -95,32 +97,57 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 		return fmt.Errorf("failed to create embedder: %w", err)
 	}
 
+	// Get embedding dimension
+	Debug("Getting embedding dimension")
+	dimension, err := embedder.GetDimension()
+	if err != nil {
+		return fmt.Errorf("failed to get embedding dimension: %w", err)
+	}
+	Debug("Embedding dimension", "dimension", dimension)
+
 	// Create vector store
+	Debug("Creating vector store")
+	// Get dimension from config or use the one from embedder
+	configDimension := 0
+	if dimStr := cfg.VectorDBConfig["dimension"]; dimStr != "" {
+		if dim, err := strconv.Atoi(dimStr); err == nil {
+			configDimension = dim
+		}
+	}
+	if configDimension == 0 {
+		configDimension = dimension
+	}
+	Debug("Using dimension", "dimension", configDimension)
+
 	vectorDB, err := NewVectorDB(
 		WithType(cfg.VectorDBType),
 		WithAddress(cfg.VectorDBConfig["address"]),
 		WithTimeout(cfg.Timeout),
+		WithDimension(configDimension),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create vector store: %w", err)
 	}
 	defer vectorDB.Close()
 
+	Debug("Connecting to vector store")
 	if err := vectorDB.Connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect to vector store: %w", err)
 	}
 
 	// Create collection if needed
 	if cfg.AutoCreate {
+		Debug("Checking collection existence", "collection", cfg.CollectionName)
 		exists, _ := vectorDB.HasCollection(ctx, cfg.CollectionName)
 		if !exists {
+			Debug("Creating collection", "collection", cfg.CollectionName)
 			schema := Schema{
 				Name: cfg.CollectionName,
 				Fields: []Field{
 					{Name: "ID", DataType: "int64", PrimaryKey: true, AutoID: true},
-					{Name: "Embedding", DataType: "float_vector", Dimension: 1536},
-					{Name: "Text", DataType: "varchar", MaxLength: 65535},     // Added MaxLength
-					{Name: "Metadata", DataType: "varchar", MaxLength: 65535}, // Added MaxLength
+					{Name: "Embedding", DataType: "float_vector", Dimension: dimension},
+					{Name: "Text", DataType: "varchar", MaxLength: 65535},
+					{Name: "Metadata", DataType: "varchar", MaxLength: 65535},
 				},
 			}
 
@@ -130,6 +157,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 			}
 
 			// Create index for vector field
+			Debug("Creating index")
 			index := Index{
 				Type:   "HNSW",
 				Metric: "L2",
@@ -143,18 +171,23 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 			}
 
 			// Load collection
+			Debug("Loading collection")
 			if err := vectorDB.LoadCollection(ctx, cfg.CollectionName); err != nil {
 				return fmt.Errorf("failed to load collection: %w", err)
 			}
 		}
 	}
+
 	// Process source
+	Debug("Processing source", "source", source)
 	var paths []string
-	var loadErr error // Changed to use a different variable name
+	var loadErr error
 	if info, err := os.Stat(source); err == nil {
 		if info.IsDir() {
+			Debug("Loading directory")
 			paths, loadErr = loader.LoadDir(ctx, source)
 		} else {
+			Debug("Loading file")
 			var path string
 			path, loadErr = loader.LoadFile(ctx, source)
 			if loadErr == nil {
@@ -165,6 +198,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 			return fmt.Errorf("failed to load source: %w", loadErr)
 		}
 	} else if isURL(source) {
+		Debug("Loading URL")
 		path, loadErr := loader.LoadURL(ctx, source)
 		if loadErr != nil {
 			return fmt.Errorf("failed to load URL: %w", loadErr)
@@ -175,10 +209,14 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	}
 
 	// Create embedding service
+	Debug("Creating embedding service")
 	embeddingService := NewEmbeddingService(embedder)
 
 	// Process files
+	Debug("Processing files", "count", len(paths))
 	for i, path := range paths {
+		Debug("Processing file", "path", path, "index", i+1, "total", len(paths))
+
 		// Parse content
 		parser := NewParser()
 		doc, err := parser.Parse(path)
@@ -188,21 +226,38 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 		}
 
 		// Create chunks
+		Debug("Creating chunks")
 		chunks := chunker.Chunk(doc.Content)
+		Debug("Created chunks", "count", len(chunks))
 
 		// Create embeddings
+		Debug("Creating embeddings")
 		embeddedChunks, err := embeddingService.EmbedChunks(ctx, chunks)
 		if err != nil {
 			cfg.OnError(fmt.Errorf("failed to embed chunks from %s: %w", path, err))
 			continue
 		}
+		Debug("Created embeddings", "count", len(embeddedChunks))
 
 		// Convert to records
+		Debug("Converting to records")
 		records := make([]Record, len(embeddedChunks))
 		for j, chunk := range embeddedChunks {
+			embedding, ok := chunk.Embeddings["default"]
+			if !ok || len(embedding) == 0 {
+				cfg.OnError(fmt.Errorf("missing or empty embedding for chunk %d in %s", j, path))
+				continue
+			}
+			
+			// Convert []float64 to []float32 for ChromemDB
+			embedding32 := make([]float32, len(embedding))
+			for i, v := range embedding {
+				embedding32[i] = float32(v)
+			}
+			
 			records[j] = Record{
 				Fields: map[string]interface{}{
-					"Embedding": chunk.Embeddings["default"],
+					"Embedding": embedding32,
 					"Text":      chunk.Text,
 					"Metadata": map[string]interface{}{
 						"source":     path,
@@ -215,6 +270,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 		}
 
 		// Insert into vector store
+		Debug("Inserting records", "count", len(records))
 		if err := vectorDB.Insert(ctx, cfg.CollectionName, records); err != nil {
 			cfg.OnError(fmt.Errorf("failed to insert records from %s: %w", path, err))
 			continue
@@ -223,6 +279,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 		cfg.OnProgress(i+1, len(paths))
 	}
 
+	Debug("Registration complete")
 	return nil
 }
 
@@ -231,6 +288,13 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 func WithVectorDB(dbType string, config map[string]string) RegisterOption {
 	return func(c *RegisterConfig) {
 		c.VectorDBType = dbType
+		if config == nil {
+			config = make(map[string]string)
+		}
+		// Ensure dimension is preserved in VectorDBConfig
+		if config["dimension"] == "" {
+			config["dimension"] = "1536" // Default dimension
+		}
 		c.VectorDBConfig = config
 	}
 }

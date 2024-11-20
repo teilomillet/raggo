@@ -32,6 +32,9 @@ type SimpleRAGConfig struct {
 	TopK         int
 	MinScore     float64
 	LLMModel     string
+	DBType       string // Type of vector database to use (e.g., "milvus", "chromem")
+	DBAddress    string // Address for the vector database (e.g., "localhost:19530" for Milvus, "./data/chromem.db" for Chromem)
+	Dimension    int    // Dimension of the embedding vectors (e.g., 1536 for text-embedding-3-small)
 }
 
 // DefaultConfig returns a default configuration
@@ -44,6 +47,9 @@ func DefaultConfig() SimpleRAGConfig {
 		TopK:         5,
 		MinScore:     0.1,
 		LLMModel:     "gpt-4o-mini",
+		DBType:       "milvus",
+		DBAddress:    "localhost:19530",
+		Dimension:    1536, // Default dimension for text-embedding-3-small
 	}
 }
 
@@ -68,6 +74,18 @@ func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 		config.LLMModel = DefaultConfig().LLMModel
 	}
 
+	if config.DBType == "" {
+		config.DBType = DefaultConfig().DBType
+	}
+
+	if config.DBAddress == "" {
+		config.DBAddress = DefaultConfig().DBAddress
+	}
+
+	if config.Dimension == 0 {
+		config.Dimension = DefaultConfig().Dimension
+	}
+
 	// Initialize LLM
 	llm, err := gollm.NewLLM(
 		gollm.SetProvider("openai"),
@@ -80,8 +98,9 @@ func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 
 	// Initialize vector database
 	vectorDB, err := NewVectorDB(
-		WithType("milvus"),
-		WithAddress("localhost:19530"),
+		WithType(config.DBType),
+		WithAddress(config.DBAddress),
+		WithDimension(config.Dimension),
 		WithTimeout(5*time.Minute),
 	)
 	if err != nil {
@@ -110,7 +129,7 @@ func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 
 	// Create retriever with configured options
 	retriever, err := NewRetriever(
-		WithRetrieveDB("milvus", "localhost:19530"),
+		WithRetrieveDB(config.DBType, config.DBAddress),
 		WithRetrieveCollection(config.Collection),
 		WithTopK(config.TopK),
 		WithMinScore(config.MinScore),
@@ -120,6 +139,7 @@ func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 			config.Model,
 			config.APIKey,
 		),
+		WithRetrieveDimension(config.Dimension),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create retriever: %w", err)
@@ -164,6 +184,10 @@ func (s *SimpleRAG) AddDocuments(ctx context.Context, source string) error {
 					WithCollection(s.collection, true),
 					WithChunking(DefaultConfig().ChunkSize, DefaultConfig().ChunkOverlap),
 					WithEmbedding("openai", s.model, s.apiKey),
+					WithVectorDB(s.vectorDB.Type(), map[string]string{
+						"address":   s.vectorDB.Address(),
+						"dimension": fmt.Sprintf("%d", s.vectorDB.Dimension()),
+					}),
 				)
 				if err != nil {
 					return fmt.Errorf("failed to add document %s: %w", file.Name(), err)
@@ -177,13 +201,17 @@ func (s *SimpleRAG) AddDocuments(ctx context.Context, source string) error {
 			WithCollection(s.collection, true),
 			WithChunking(DefaultConfig().ChunkSize, DefaultConfig().ChunkOverlap),
 			WithEmbedding("openai", s.model, s.apiKey),
+			WithVectorDB(s.vectorDB.Type(), map[string]string{
+				"address":   s.vectorDB.Address(),
+				"dimension": fmt.Sprintf("%d", s.vectorDB.Dimension()),
+			}),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to add document: %w", err)
 		}
 	}
 
-	// Create and load index
+	// Create and load index only once after all documents are processed
 	err = s.vectorDB.CreateIndex(ctx, s.collection, "Embedding", Index{
 		Type:   "HNSW",
 		Metric: "L2",
@@ -213,6 +241,37 @@ func (s *SimpleRAG) Search(ctx context.Context, query string) (string, error) {
 	}
 
 	log.Printf("Performing search with query: %s", query)
+
+	// Get the total number of documents in the collection
+	hasCollection, err := s.vectorDB.HasCollection(ctx, s.collection)
+	if err != nil {
+		return "", fmt.Errorf("failed to check collection: %w", err)
+	}
+	if !hasCollection {
+		return "", fmt.Errorf("collection %s does not exist", s.collection)
+	}
+
+	// Load collection to ensure it's ready for search
+	err = s.vectorDB.LoadCollection(ctx, s.collection)
+	if err != nil {
+		return "", fmt.Errorf("failed to load collection: %w", err)
+	}
+
+	// Set the retriever's TopK based on the config or dynamically
+	if s.retriever.config.TopK <= 0 {
+		// Do a test search with topK=1 to get number of documents
+		testResults, err := s.vectorDB.Search(ctx, s.collection, map[string]Vector{"test": make(Vector, s.vectorDB.Dimension())}, 1, "L2", nil)
+		if err != nil {
+			return "", fmt.Errorf("failed to get collection size: %w", err)
+		}
+		// Set TopK to min(20, numDocs) if not specified
+		s.retriever.config.TopK = 20
+		if len(testResults) < 20 {
+			s.retriever.config.TopK = len(testResults)
+		}
+	}
+
+	log.Printf("Using TopK=%d for search", s.retriever.config.TopK)
 
 	results, err := s.retriever.Retrieve(ctx, query)
 	if err != nil {

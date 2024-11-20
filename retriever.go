@@ -27,6 +27,7 @@ type RetrieverConfig struct {
 	// Vector DB settings
 	DBType    string
 	DBAddress string
+	Dimension int
 
 	// Embedding settings
 	Provider string
@@ -59,6 +60,7 @@ func defaultRetrieverConfig() *RetrieverConfig {
 		Columns:    []string{"Text", "Metadata"},
 		DBType:     "milvus",
 		DBAddress:  "localhost:19530",
+		Dimension:  128,
 		Provider:   "openai",
 		Model:      "text-embedding-3-small",
 		APIKey:     os.Getenv("OPENAI_API_KEY"),
@@ -96,6 +98,7 @@ func (r *Retriever) initialize() error {
 		WithType(r.config.DBType),
 		WithAddress(r.config.DBAddress),
 		WithTimeout(r.config.Timeout),
+		WithDimension(r.config.Dimension),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create vector store: %w", err)
@@ -249,6 +252,12 @@ func WithHybrid(enabled bool) RetrieverOption {
 func WithColumns(columns ...string) RetrieverOption {
 	return func(c *RetrieverConfig) {
 		c.Columns = columns
+	}
+}
+
+func WithRetrieveDimension(dimension int) RetrieverOption {
+	return func(c *RetrieverConfig) {
+		c.Dimension = dimension
 	}
 }
 

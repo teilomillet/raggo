@@ -11,7 +11,10 @@ import (
 )
 
 type VectorDB struct {
-	db rag.VectorDB
+	db        rag.VectorDB
+	dbType    string
+	address   string
+	dimension int
 }
 
 type Config struct {
@@ -19,6 +22,7 @@ type Config struct {
 	Address     string
 	MaxPoolSize int
 	Timeout     time.Duration
+	Dimension   int
 }
 
 type Option func(*Config)
@@ -47,6 +51,12 @@ func WithTimeout(timeout time.Duration) Option {
 	}
 }
 
+func WithDimension(dimension int) Option {
+	return func(c *Config) {
+		c.Dimension = dimension
+	}
+}
+
 func NewVectorDB(opts ...Option) (*VectorDB, error) {
 	cfg := &Config{}
 	for _, opt := range opts {
@@ -57,11 +67,19 @@ func NewVectorDB(opts ...Option) (*VectorDB, error) {
 		Address:     cfg.Address,
 		MaxPoolSize: cfg.MaxPoolSize,
 		Timeout:     cfg.Timeout,
+		Parameters: map[string]interface{}{
+			"dimension": cfg.Dimension,
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &VectorDB{db: ragDB}, nil
+	return &VectorDB{
+		db:        ragDB,
+		dbType:    cfg.Type,
+		address:   cfg.Address,
+		dimension: cfg.Dimension,
+	}, nil
 }
 
 func (vdb *VectorDB) Connect(ctx context.Context) error {
@@ -136,6 +154,18 @@ func convertSearchResults(ragResults []rag.SearchResult) []SearchResult {
 
 func (vdb *VectorDB) SetColumnNames(names []string) {
 	vdb.db.SetColumnNames(names)
+}
+
+func (vdb *VectorDB) Type() string {
+	return vdb.dbType
+}
+
+func (vdb *VectorDB) Address() string {
+	return vdb.address
+}
+
+func (vdb *VectorDB) Dimension() int {
+	return vdb.dimension
 }
 
 // Types to match the internal rag package

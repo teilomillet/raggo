@@ -234,6 +234,8 @@ func (m *MilvusDB) createColumn(fieldName string, fieldValue interface{}) entity
 		return entity.NewColumnInt64(fieldName, []int64{})
 	case []float64:
 		return entity.NewColumnFloatVector(fieldName, len(v), [][]float32{})
+	case []float32:
+		return entity.NewColumnFloatVector(fieldName, len(v), [][]float32{})
 	case string:
 		return entity.NewColumnVarChar(fieldName, []string{})
 	case map[string]interface{}:
@@ -254,9 +256,17 @@ func (m *MilvusDB) appendToColumn(col entity.Column, value interface{}) {
 	case *entity.ColumnInt64:
 		c.AppendValue(value.(int64))
 	case *entity.ColumnFloatVector:
-		floatVector := make([]float32, len(value.([]float64)))
-		for i, v := range value.([]float64) {
-			floatVector[i] = float32(v)
+		var floatVector []float32
+		switch v := value.(type) {
+		case []float64:
+			floatVector = make([]float32, len(v))
+			for i, val := range v {
+				floatVector[i] = float32(val)
+			}
+		case []float32:
+			floatVector = v
+		default:
+			panic(fmt.Sprintf("unsupported vector type: %T", value))
 		}
 		c.AppendValue(floatVector)
 	case *entity.ColumnVarChar:

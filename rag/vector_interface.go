@@ -66,6 +66,7 @@ type Config struct {
 	Address     string
 	MaxPoolSize int
 	Timeout     time.Duration
+	Parameters  map[string]interface{}
 }
 
 type Option func(*Config)
@@ -96,6 +97,8 @@ func NewVectorDB(cfg *Config) (VectorDB, error) {
 		return newMilvusDB(cfg)
 	case "memory":
 		return newMemoryDB(cfg)
+	case "chromem":
+		return newChromemDB(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", cfg.Type)
 	}

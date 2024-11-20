@@ -109,3 +109,16 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) ([]float64, err
 
 	return embeddingResp.Data[0].Embedding, nil
 }
+
+func (e *OpenAIEmbedder) GetDimension() (int, error) {
+	switch e.modelName {
+	case "text-embedding-3-small":
+		return 1536, nil
+	case "text-embedding-3-large":
+		return 3072, nil
+	case "text-embedding-ada-002":
+		return 1536, nil
+	default:
+		return 0, fmt.Errorf("unknown model: %s", e.modelName)
+	}
+}
