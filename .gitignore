@@ -23,4 +23,6 @@ go.work
 go.work.sum
 data/chromem.db/
 
+.DS_Store
+
 *.json
