@@ -1,6 +1,15 @@
 # Raggo - Retrieval Augmented Generation Library
 
-A flexible RAG (Retrieval Augmented Generation) library for Go, designed to make document processing and context-aware AI interactions simple and efficient.
+> A flexible RAG (Retrieval Augmented Generation) library for Go, designed to make document processing and context-aware AI interactions simple and efficient.
+
+<p align="center">
+  <strong>🔍 Smart Document Search • 💬 Context-Aware Responses • 🤖 Intelligent RAG</strong>
+</p>
+
+[![Go Reference](https://pkg.go.dev/badge/github.com/teilomillet/raggo.svg)](https://pkg.go.dev/github.com/teilomillet/raggo)
+[![Go Report Card](https://goreportcard.com/badge/github.com/teilomillet/raggo)](https://goreportcard.com/report/github.com/teilomillet/raggo)
+[![License](https://img.shields.io/github/license/teilomillet/raggo)](https://github.com/teilomillet/raggo/blob/main/LICENSE)
+
 
 ## Quick Start
 
@@ -76,15 +85,7 @@ Environment variables (take precedence over config files):
 - `RAGGO_COLLECTION`: Collection name
 - `RAGGO_API_KEY`: Default API key
 
-> A powerful, production-ready RAG (Retrieval-Augmented Generation) library in Go.
 
-<p align="center">
-  <strong>🔍 Smart Document Search • 💬 Context-Aware Responses • 🤖 Intelligent RAG</strong>
-</p>
-
-[![Go Reference](https://pkg.go.dev/badge/github.com/teilomillet/raggo.svg)](https://pkg.go.dev/github.com/teilomillet/raggo)
-[![Go Report Card](https://goreportcard.com/badge/github.com/teilomillet/raggo)](https://goreportcard.com/report/github.com/teilomillet/raggo)
-[![License](https://img.shields.io/github/license/teilomillet/raggo)](https://github.com/teilomillet/raggo/blob/main/LICENSE)
 
 ## Table of Contents
 
