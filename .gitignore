@@ -21,3 +21,4 @@ testdata/
 # Go workspace file
 go.work
 go.work.sum
+data/chromem.db/
