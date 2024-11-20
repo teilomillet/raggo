@@ -22,3 +22,5 @@ testdata/
 go.work
 go.work.sum
 data/chromem.db/
+
+*.json

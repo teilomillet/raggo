@@ -1,3 +1,44 @@
+// Package raggo implements a comprehensive Retrieval-Augmented Generation (RAG) system
+// that enhances language models with the ability to access and reason over external
+// knowledge. The system seamlessly integrates vector similarity search with natural
+// language processing to provide accurate and contextually relevant responses.
+//
+// The package offers two main interfaces:
+//   - RAG: A full-featured implementation with extensive configuration options
+//   - SimpleRAG: A streamlined interface for basic use cases
+//
+// The RAG system works by:
+// 1. Processing documents into semantic chunks
+// 2. Storing document vectors in a configurable database
+// 3. Finding relevant context through similarity search
+// 4. Generating responses that combine retrieved context with queries
+//
+// Key Features:
+//   - Multiple vector database support (Milvus, in-memory, Chrome)
+//   - Intelligent document chunking and embedding
+//   - Hybrid search capabilities
+//   - Context-aware retrieval
+//   - Configurable LLM integration
+//
+// Example Usage:
+//
+//	config := raggo.DefaultRAGConfig()
+//	config.APIKey = os.Getenv("OPENAI_API_KEY")
+//	
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetProvider("openai"),
+//	    raggo.SetModel("text-embedding-3-small"),
+//	    raggo.WithMilvus("my_documents"),
+//	)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	
+//	// Add documents
+//	err = rag.LoadDocuments(context.Background(), "path/to/docs")
+//	
+//	// Query the system
+//	results, err := rag.Query(context.Background(), "your question here")
 package raggo
 
 import (
@@ -11,51 +52,68 @@ import (
 	"github.com/teilomillet/raggo/rag"
 )
 
-// RAGConfig holds all RAG settings to avoid name collision with VectorDB Config
+// RAGConfig holds the complete configuration for a RAG system. It provides
+// fine-grained control over all aspects of the system's operation, from database
+// settings to search parameters. The configuration is designed to be flexible
+// enough to accommodate various use cases while maintaining sensible defaults.
 type RAGConfig struct {
-	// Database settings
-	DBType      string
-	DBAddress   string
-	Collection  string
-	AutoCreate  bool
-	IndexType   string
-	IndexMetric string
+	// Database settings control how documents are stored and indexed
+	DBType      string        // Vector database type (e.g., "milvus", "memory")
+	DBAddress   string        // Database connection address
+	Collection  string        // Name of the vector collection
+	AutoCreate  bool          // Automatically create collection if it doesn't exist
+	IndexType   string        // Type of vector index (e.g., "HNSW", "IVF")
+	IndexMetric string        // Distance metric for similarity (e.g., "L2", "IP")
 
-	// Processing settings
-	ChunkSize    int
-	ChunkOverlap int
-	BatchSize    int
+	// Processing settings determine how documents are handled
+	ChunkSize    int // Size of text chunks in tokens
+	ChunkOverlap int // Overlap between consecutive chunks
+	BatchSize    int // Number of documents to process in parallel
 
-	// Embedding settings
-	Provider string
-	Model    string // For embeddings
-	LLMModel string // For LLM operations
-	APIKey   string
+	// Embedding settings configure vector generation
+	Provider  string // Embedding provider (e.g., "openai", "cohere")
+	Model     string // Embedding model name
+	LLMModel  string // Language model for text generation
+	APIKey    string // API key for the provider
 
-	// Search settings
-	TopK      int
-	MinScore  float64
-	UseHybrid bool
+	// Search settings control retrieval behavior
+	TopK      int     // Number of results to retrieve
+	MinScore  float64 // Minimum similarity score threshold
+	UseHybrid bool    // Whether to use hybrid search
 
-	// System settings
-	Timeout time.Duration
-	TempDir string
-	Debug   bool
-
-	// Search parameters
-	SearchParams map[string]interface{} // Add this field
+	// System settings affect operational behavior
+	Timeout  time.Duration           // Operation timeout
+	TempDir  string                 // Directory for temporary files
+	Debug    bool                   // Enable debug logging
+	
+	// Search parameters for fine-tuning
+	SearchParams map[string]interface{} // Provider-specific search parameters
 }
 
-// RAGOption modifies RAGConfig
+// RAGOption is a function that modifies RAGConfig.
+// It follows the functional options pattern for clean and flexible configuration.
 type RAGOption func(*RAGConfig)
 
-// RAG provides a unified interface for document processing and retrieval
+// RAG provides a comprehensive interface for document processing and retrieval.
+// It coordinates the interaction between multiple components:
+// - Vector database for efficient similarity search
+// - Embedding service for semantic vector generation
+// - Document processor for text chunking and enrichment
+// - Language model for context-aware response generation
+//
+// The system is designed to be:
+// - Thread-safe for concurrent operations
+// - Memory-efficient when processing large documents
+// - Extensible through custom implementations
+// - Configurable for different use cases
 type RAG struct {
-	db       *VectorDB
-	embedder *EmbeddingService
-	config   *RAGConfig
+	db       *VectorDB          // Vector database connection
+	embedder *EmbeddingService  // Service for generating embeddings
+	config   *RAGConfig         // System configuration
 }
 
+// DefaultRAGConfig returns a default RAG configuration.
+// It provides a reasonable set of default values for most use cases.
 func DefaultRAGConfig() *RAGConfig {
 	return &RAGConfig{
 		DBType:       "milvus",
@@ -85,78 +143,183 @@ func DefaultRAGConfig() *RAGConfig {
 }
 
 // Common options
+// SetProvider sets the embedding provider for the RAG system.
+// Supported providers include "openai", "cohere", and others depending on implementation.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetProvider("openai"),
+//	)
 func SetProvider(provider string) RAGOption {
 	return func(c *RAGConfig) {
 		c.Provider = provider
 	}
 }
 
+// SetModel specifies the embedding model to use for vector generation.
+// The model should be compatible with the chosen provider.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetModel("text-embedding-3-small"),
+//	)
 func SetModel(model string) RAGOption {
 	return func(c *RAGConfig) {
 		c.Model = model
 	}
 }
 
+// SetAPIKey configures the API key for the chosen provider.
+// This key should have appropriate permissions for embedding and LLM operations.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
+//	)
 func SetAPIKey(key string) RAGOption {
 	return func(c *RAGConfig) {
 		c.APIKey = key
 	}
 }
 
+// SetCollection specifies the name of the vector collection to use.
+// This collection will store document embeddings and metadata.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetCollection("my_documents"),
+//	)
 func SetCollection(name string) RAGOption {
 	return func(c *RAGConfig) {
 		c.Collection = name
 	}
 }
 
+// SetSearchStrategy configures the search approach for document retrieval.
+// Supported strategies include "simple" for pure vector search and
+// "hybrid" for combined vector and keyword search.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetSearchStrategy("hybrid"),
+//	)
 func SetSearchStrategy(strategy string) RAGOption {
 	return func(c *RAGConfig) {
 		c.UseHybrid = strategy == "hybrid"
 	}
 }
 
+// SetDBAddress configures the connection address for the vector database.
+// Format depends on the database type (e.g., "localhost:19530" for Milvus).
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetDBAddress("localhost:19530"),
+//	)
 func SetDBAddress(address string) RAGOption {
 	return func(c *RAGConfig) {
 		c.DBAddress = address
 	}
 }
 
+// SetChunkSize configures the size of text chunks in tokens.
+// Larger chunks provide more context but may reduce retrieval precision.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetChunkSize(512),
+//	)
 func SetChunkSize(size int) RAGOption {
 	return func(c *RAGConfig) {
 		c.ChunkSize = size
 	}
 }
 
+// SetChunkOverlap specifies the overlap between consecutive chunks in tokens.
+// Overlap helps maintain context across chunk boundaries.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetChunkOverlap(50),
+//	)
 func SetChunkOverlap(overlap int) RAGOption {
 	return func(c *RAGConfig) {
 		c.ChunkOverlap = overlap
 	}
 }
 
+// SetTopK configures the number of similar documents to retrieve.
+// Higher values provide more context but may introduce noise.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetTopK(5),
+//	)
 func SetTopK(k int) RAGOption {
 	return func(c *RAGConfig) {
 		c.TopK = k
 	}
 }
 
+// SetMinScore sets the minimum similarity score threshold for retrieval.
+// Documents with scores below this threshold are filtered out.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetMinScore(0.7),
+//	)
 func SetMinScore(score float64) RAGOption {
 	return func(c *RAGConfig) {
 		c.MinScore = score
 	}
 }
 
+// SetTimeout configures the maximum duration for operations.
+// This affects database operations, embedding generation, and LLM calls.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetTimeout(30 * time.Second),
+//	)
 func SetTimeout(timeout time.Duration) RAGOption {
 	return func(c *RAGConfig) {
 		c.Timeout = timeout
 	}
 }
 
+// SetDebug enables or disables debug logging.
+// When enabled, the system will output detailed operation information.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.SetDebug(true),
+//	)
 func SetDebug(debug bool) RAGOption {
 	return func(c *RAGConfig) {
 		c.Debug = debug
 	}
 }
 
+// WithOpenAI is a convenience function that configures the RAG system
+// to use OpenAI's embedding and language models.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.WithOpenAI(os.Getenv("OPENAI_API_KEY")),
+//	)
 func WithOpenAI(apiKey string) RAGOption {
 	return func(c *RAGConfig) {
 		c.Provider = "openai"
@@ -165,6 +328,14 @@ func WithOpenAI(apiKey string) RAGOption {
 	}
 }
 
+// WithMilvus is a convenience function that configures the RAG system
+// to use Milvus as the vector database with the specified collection.
+//
+// Example:
+//
+//	rag, err := raggo.NewRAG(
+//	    raggo.WithMilvus("my_documents"),
+//	)
 func WithMilvus(collection string) RAGOption {
 	return func(c *RAGConfig) {
 		c.DBType = "milvus"
@@ -173,7 +344,8 @@ func WithMilvus(collection string) RAGOption {
 	}
 }
 
-// NewRAG creates a new RAG instance
+// NewRAG creates a new RAG instance.
+// It takes a variable number of RAGOption functions to configure the system.
 func NewRAG(opts ...RAGOption) (*RAG, error) {
 	cfg := DefaultRAGConfig()
 	for _, opt := range opts {
@@ -215,7 +387,16 @@ func (r *RAG) initialize() error {
 	return r.db.Connect(context.Background())
 }
 
-// LoadDocuments processes and stores documents
+// LoadDocuments processes and stores documents in the vector database.
+// It handles various document formats and automatically chunks text
+// based on the configured chunk size and overlap.
+//
+// The source parameter can be a file path or directory. When a directory
+// is provided, all supported documents within it are processed recursively.
+//
+// Example:
+//
+//	err := rag.LoadDocuments(ctx, "path/to/docs")
 func (r *RAG) LoadDocuments(ctx context.Context, source string) error {
 	loader := NewLoader(SetTempDir(r.config.TempDir))
 	chunker, err := NewChunker(
@@ -261,7 +442,8 @@ func (r *RAG) LoadDocuments(ctx context.Context, source string) error {
 	return nil
 }
 
-// storeEnrichedChunks stores chunks with their context
+// storeEnrichedChunks stores chunks with their context.
+// It takes a context, enriched chunks, and a source path as input.
 func (r *RAG) storeEnrichedChunks(ctx context.Context, enrichedChunks []string, source string) error {
 	// Convert strings to Chunks
 	chunks := make([]rag.Chunk, len(enrichedChunks))
@@ -299,7 +481,8 @@ func (r *RAG) storeEnrichedChunks(ctx context.Context, enrichedChunks []string, 
 	return r.db.Insert(ctx, r.config.Collection, records)
 }
 
-// ProcessWithContext processes and stores documents with additional contextual information
+// ProcessWithContext processes and stores documents with additional contextual information.
+// It takes a context, source path, and an optional LLM model as input.
 func (r *RAG) ProcessWithContext(ctx context.Context, source string, llmModel string) error {
 	Debug("Processing source:", source)
 
@@ -475,7 +658,16 @@ Provide only the context, without any introductory phrases or explanations.`, ch
 	return llm.Generate(ctx, gollm.NewPrompt(prompt))
 }
 
-// Query performs RAG retrieval and returns results
+// Query performs a retrieval operation using the configured search strategy.
+// It returns a slice of RetrieverResult containing relevant document chunks
+// and their similarity scores.
+//
+// The query parameter should be a natural language question or statement.
+// The system will convert it to a vector and find similar documents.
+//
+// Example:
+//
+//	results, err := rag.Query(ctx, "How does feature X work?")
 func (r *RAG) Query(ctx context.Context, query string) ([]RetrieverResult, error) {
 	if !r.config.UseHybrid {
 		return r.simpleSearch(ctx, query)
@@ -483,7 +675,14 @@ func (r *RAG) Query(ctx context.Context, query string) ([]RetrieverResult, error
 	return r.hybridSearch(ctx, query)
 }
 
-// Close releases resources
+// Close releases all resources held by the RAG system, including
+// database connections and embedding service clients.
+//
+// It should be called when the RAG system is no longer needed.
+//
+// Example:
+//
+//	defer rag.Close()
 func (r *RAG) Close() error {
 	if r.db != nil {
 		return r.db.Close()

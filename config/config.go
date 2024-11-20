@@ -1,3 +1,15 @@
+// Package config provides a flexible configuration management system for the Raggo
+// Retrieval-Augmented Generation (RAG) framework. It handles configuration loading,
+// validation, and persistence with support for multiple sources:
+//   - Configuration files (JSON)
+//   - Environment variables
+//   - Programmatic defaults
+//
+// The package implements a hierarchical configuration system where settings can be
+// overridden in the following order (highest to lowest precedence):
+//   1. Environment variables
+//   2. Configuration file
+//   3. Default values
 package config
 
 import (
@@ -7,62 +19,93 @@ import (
 	"time"
 )
 
-// Config holds all configuration for the RAG system
+// Config holds all configuration for the RAG system. It provides a centralized
+// way to manage settings across different components of the system.
+//
+// Configuration categories:
+//   - Provider settings: Embedding and service providers
+//   - Collection settings: Vector database collections
+//   - Search settings: Retrieval and ranking parameters
+//   - Document processing: Text chunking and batching
+//   - Vector store: Database-specific configuration
+//   - System settings: Timeouts, retries, and headers
 type Config struct {
-	// Provider settings
-	Provider string
-	Model    string
-	APIKeys  map[string]string
+	// Provider settings configure the embedding and service providers
+	Provider string            // Service provider (e.g., "milvus", "openai")
+	Model    string            // Model identifier for embeddings
+	APIKeys  map[string]string // API keys for different providers
 
-	// Collection settings
-	Collection string
+	// Collection settings define the vector database structure
+	Collection string // Name of the vector collection
 
-	// Search settings
-	SearchStrategy      string
-	DefaultTopK        int
-	DefaultMinScore    float64
-	DefaultSearchParams map[string]interface{}
-	EnableReRanking    bool
-	RRFConstant        float64
+	// Search settings control retrieval behavior and ranking
+	SearchStrategy      string                 // Search method (e.g., "dense", "hybrid")
+	DefaultTopK        int                    // Default number of results to return
+	DefaultMinScore    float64                // Minimum similarity score threshold
+	DefaultSearchParams map[string]interface{} // Additional search parameters
+	EnableReRanking    bool                   // Enable result re-ranking
+	RRFConstant        float64                // Reciprocal Rank Fusion constant
 
-	// Document processing settings
-	DefaultChunkSize    int
-	DefaultChunkOverlap int
-	DefaultBatchSize    int
-	DefaultIndexType    string
+	// Document processing settings for text handling
+	DefaultChunkSize    int // Size of text chunks
+	DefaultChunkOverlap int // Overlap between consecutive chunks
+	DefaultBatchSize    int // Number of items per processing batch
+	DefaultIndexType    string // Type of vector index (e.g., "HNSW")
 
-	// Vector store settings
-	VectorDBConfig map[string]interface{}
+	// Vector store settings for database configuration
+	VectorDBConfig map[string]interface{} // Database-specific settings
 
-	// Timeouts and retries
-	Timeout    time.Duration
-	MaxRetries int
+	// Timeouts and retries for system operations
+	Timeout    time.Duration // Operation timeout
+	MaxRetries int          // Maximum retry attempts
 
-	// Additional settings
-	ExtraHeaders map[string]string
+	// Additional settings for extended functionality
+	ExtraHeaders map[string]string // Additional HTTP headers
 }
 
-// LoadConfig loads configuration from a file or environment
+// LoadConfig loads configuration from multiple sources, combining them according
+// to the precedence rules. It automatically searches for configuration files in
+// standard locations and applies environment variable overrides.
+//
+// Configuration file search paths:
+//   1. $RAGGO_CONFIG environment variable
+//   2. ~/.raggo/config.json
+//   3. ~/.config/raggo/config.json
+//   4. ./raggo.json
+//
+// Environment variable overrides:
+//   - RAGGO_PROVIDER: Service provider
+//   - RAGGO_MODEL: Model identifier
+//   - RAGGO_COLLECTION: Collection name
+//   - RAGGO_API_KEY: Default API key
+//
+// Example usage:
+//
+//	cfg, err := config.LoadConfig()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Printf("Using provider: %s\n", cfg.Provider)
 func LoadConfig() (*Config, error) {
-	// Default configuration
+	// Default configuration with production-ready settings
 	cfg := &Config{
-		Provider:            "milvus",
-		Model:              "text-embedding-3-small",
-		Collection:         "documents",
-		SearchStrategy:     "dense",
-		DefaultTopK:        5,
-		DefaultMinScore:    0.7,
-		DefaultChunkSize:   512,
-		DefaultChunkOverlap: 50,
-		DefaultBatchSize:   100,
-		DefaultIndexType:   "HNSW",
+		Provider:            "milvus",           // Fast, open-source vector database
+		Model:              "text-embedding-3-small", // Latest OpenAI embedding model
+		Collection:         "documents",         // Default collection name
+		SearchStrategy:     "dense",            // Pure vector similarity search
+		DefaultTopK:        5,                  // Conservative number of results
+		DefaultMinScore:    0.7,                // High confidence threshold
+		DefaultChunkSize:   512,                // Balanced chunk size
+		DefaultChunkOverlap: 50,                // Moderate overlap
+		DefaultBatchSize:   100,                // Efficient batch size
+		DefaultIndexType:   "HNSW",             // Fast approximate search
 		DefaultSearchParams: map[string]interface{}{
-			"ef": 64,
+			"ef": 64,                           // HNSW search depth
 		},
-		EnableReRanking: false,
-		RRFConstant:     60,
-		Timeout:         30 * time.Second,
-		MaxRetries:      3,
+		EnableReRanking: false,                 // Disabled by default
+		RRFConstant:     60,                    // Standard RRF constant
+		Timeout:         30 * time.Second,      // Conservative timeout
+		MaxRetries:      3,                     // Reasonable retry count
 		APIKeys:         make(map[string]string),
 		ExtraHeaders:    make(map[string]string),
 		VectorDBConfig:  make(map[string]interface{}),
@@ -115,7 +158,20 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
-// Save saves the configuration to a file
+// Save persists the configuration to a JSON file at the specified path.
+// It creates any necessary parent directories and sets appropriate file
+// permissions.
+//
+// Example usage:
+//
+//	cfg := &Config{
+//	    Provider: "milvus",
+//	    Model:    "text-embedding-3-small",
+//	}
+//	err := cfg.Save("~/.raggo/config.json")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 func (c *Config) Save(path string) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

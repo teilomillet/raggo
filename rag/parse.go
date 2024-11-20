@@ -1,3 +1,6 @@
+// Package rag provides document parsing capabilities for various file formats.
+// The parsing system is designed to be extensible, allowing users to add custom parsers
+// for different file types while maintaining a consistent interface.
 package rag
 
 import (
@@ -9,24 +12,34 @@ import (
 	"github.com/ledongthuc/pdf"
 )
 
-// Document represents a parsed document
+// Document represents a parsed document with its content and associated metadata.
+// The Content field contains the extracted text, while Metadata stores additional
+// information about the document such as file type and path.
 type Document struct {
-	Content  string
-	Metadata map[string]string
+	Content  string            // The extracted text content of the document
+	Metadata map[string]string // Additional metadata about the document
 }
 
-// Parser defines the interface for parsing documents
+// Parser defines the interface for document parsing implementations.
+// Any type that implements this interface can be registered with the ParserManager
+// to handle specific file types.
 type Parser interface {
+	// Parse processes a file at the given path and returns a Document.
+	// It returns an error if the parsing operation fails.
 	Parse(filePath string) (Document, error)
 }
 
-// ParserManager is responsible for managing different parsers
+// ParserManager coordinates document parsing by managing different Parser implementations
+// and routing files to the appropriate parser based on their type.
 type ParserManager struct {
+	// fileTypeDetector determines the file type based on the file path.
 	fileTypeDetector func(string) string
-	parsers          map[string]Parser
+	// parsers stores the registered parsers for different file types.
+	parsers map[string]Parser
 }
 
-// NewParserManager creates a new ParserManager with default settings
+// NewParserManager creates a new ParserManager initialized with default settings
+// and parsers for common file types (PDF and text files).
 func NewParserManager() *ParserManager {
 	pm := &ParserManager{
 		fileTypeDetector: defaultFileTypeDetector,
@@ -40,7 +53,10 @@ func NewParserManager() *ParserManager {
 	return pm
 }
 
-// Parse parses a document using the appropriate parser based on file type
+// Parse processes a document using the appropriate parser based on the file type.
+// It uses the configured fileTypeDetector to determine the file type and then
+// delegates to the corresponding parser. Returns an error if no suitable parser
+// is found or if parsing fails.
 func (pm *ParserManager) Parse(filePath string) (Document, error) {
 	GlobalLogger.Debug("Starting to parse file", "path", filePath)
 	fileType := pm.fileTypeDetector(filePath)
@@ -58,7 +74,8 @@ func (pm *ParserManager) Parse(filePath string) (Document, error) {
 	return doc, nil
 }
 
-// defaultFileTypeDetector is a simple file type detector based on file extension
+// defaultFileTypeDetector determines file type based on file extension.
+// Currently supports .pdf and .txt files, returning "unknown" for other extensions.
 func defaultFileTypeDetector(filePath string) string {
 	ext := strings.ToLower(filepath.Ext(filePath))
 	switch ext {
@@ -71,7 +88,32 @@ func defaultFileTypeDetector(filePath string) string {
 	}
 }
 
-// Parse parses a PDF file and returns its content
+// SetFileTypeDetector allows customization of how file types are detected.
+// This can be used to implement more sophisticated file type detection beyond
+// simple extension matching.
+func (pm *ParserManager) SetFileTypeDetector(detector func(string) string) {
+	pm.fileTypeDetector = detector
+}
+
+// AddParser registers a new parser for a specific file type.
+// This allows users to extend the system with custom parsers for additional
+// file formats.
+func (pm *ParserManager) AddParser(fileType string, parser Parser) {
+	pm.parsers[fileType] = parser
+}
+
+// PDFParser implements the Parser interface for PDF files using the
+// ledongthuc/pdf library for text extraction.
+type PDFParser struct{}
+
+// NewPDFParser creates a new PDFParser instance.
+func NewPDFParser() *PDFParser {
+	return &PDFParser{}
+}
+
+// Parse implements the Parser interface for PDF files.
+// It extracts text content from the PDF and returns it along with basic metadata.
+// Returns an error if the PDF cannot be processed.
 func (p *PDFParser) Parse(filePath string) (Document, error) {
 	GlobalLogger.Debug("Starting to parse PDF", "path", filePath)
 	content, err := p.extractText(filePath)
@@ -89,25 +131,9 @@ func (p *PDFParser) Parse(filePath string) (Document, error) {
 	}, nil
 }
 
-// SetFileTypeDetector sets a custom file type detector
-func (pm *ParserManager) SetFileTypeDetector(detector func(string) string) {
-	pm.fileTypeDetector = detector
-}
-
-// AddParser adds a parser for a specific file type
-func (pm *ParserManager) AddParser(fileType string, parser Parser) {
-	pm.parsers[fileType] = parser
-}
-
-// PDFParser is the implementation of Parser for PDF files
-type PDFParser struct{}
-
-// NewPDFParser creates a new PDFParser
-func NewPDFParser() *PDFParser {
-	return &PDFParser{}
-}
-
-// extractText extracts plain text from a PDF file
+// extractText performs the actual text extraction from a PDF file.
+// It processes the PDF page by page, concatenating the extracted text.
+// Returns an error if any part of the extraction process fails.
 func (p *PDFParser) extractText(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -143,15 +169,17 @@ func (p *PDFParser) extractText(filePath string) (string, error) {
 	return textBuilder.String(), nil
 }
 
-// TextParser is the implementation of Parser for text files
+// TextParser implements the Parser interface for plain text files.
 type TextParser struct{}
 
-// NewTextParser creates a new TextParser
+// NewTextParser creates a new TextParser instance.
 func NewTextParser() *TextParser {
 	return &TextParser{}
 }
 
-// Parse parses a text file and returns its content
+// Parse implements the Parser interface for text files.
+// It reads the entire file content and returns it along with basic metadata.
+// Returns an error if the file cannot be read.
 func (p *TextParser) Parse(filePath string) (Document, error) {
 	GlobalLogger.Debug("Starting to parse text file", "path", filePath)
 	content, err := os.ReadFile(filePath)

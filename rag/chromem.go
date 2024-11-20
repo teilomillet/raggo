@@ -1,5 +1,4 @@
-// File: chromem.go
-
+// Package rag provides retrieval-augmented generation capabilities.
 package rag
 
 import (
@@ -13,14 +12,36 @@ import (
 	"github.com/philippgille/chromem-go"
 )
 
+// ChromemDB implements a vector database interface using ChromeM.
+// ChromeM is a lightweight, embedded vector database that supports:
+// - In-memory and persistent storage modes
+// - Multiple embedding providers (OpenAI, Cohere, etc.)
+// - Collection-based organization
+// - Approximate nearest neighbor search
+//
+// This implementation features:
+// - Thread-safe operations with mutex protection
+// - Automatic collection management
+// - OpenAI embedding integration
+// - Configurable vector dimensions
 type ChromemDB struct {
-	db          *chromem.DB
-	collections map[string]*chromem.Collection
-	mu          sync.RWMutex
-	columnNames []string
-	dimension   int
+	db          *chromem.DB            // Underlying ChromeM database
+	collections map[string]*chromem.Collection // Cache of active collections
+	mu          sync.RWMutex          // Protects concurrent access to collections
+	columnNames []string              // Names of columns to retrieve in search results
+	dimension   int                   // Vector dimension for embeddings
 }
 
+// newChromemDB creates a new ChromemDB instance with the given configuration.
+// It supports both in-memory and persistent storage modes:
+// - If cfg.Address is empty: Creates an in-memory database
+// - If cfg.Address is set: Creates a persistent database at the specified path
+//
+// The function performs initial setup and validation:
+// 1. Configures vector dimension (default: 1536 for OpenAI embeddings)
+// 2. Creates necessary directories for persistent storage
+// 3. Tests database functionality with a temporary collection
+// 4. Verifies OpenAI API key availability
 func newChromemDB(cfg *Config) (*ChromemDB, error) {
 	log.Printf("Creating new ChromemDB with config: %+v", cfg)
 
@@ -108,6 +129,9 @@ func newChromemDB(cfg *Config) (*ChromemDB, error) {
 	}, nil
 }
 
+// Connect establishes a connection to the ChromeM database.
+// This is a no-op for ChromeM as it's an embedded database,
+// but implemented to satisfy the database interface.
 func (c *ChromemDB) Connect(ctx context.Context) error {
 	log.Printf("Connecting to ChromemDB")
 	// No explicit connect needed for chromem
@@ -115,11 +139,21 @@ func (c *ChromemDB) Connect(ctx context.Context) error {
 	return nil
 }
 
+// Close releases any resources held by the ChromeM database.
+// This is a no-op for ChromeM as it's an embedded database,
+// but implemented to satisfy the database interface.
 func (c *ChromemDB) Close() error {
 	// No explicit close in chromem
 	return nil
 }
 
+// HasCollection checks if a collection exists in the database.
+// The function:
+// 1. Checks the local collection cache first
+// 2. Falls back to querying the database directly
+// 3. Updates the cache if the collection is found
+//
+// Thread-safe: Protected by read lock.
 func (c *ChromemDB) HasCollection(ctx context.Context, name string) (bool, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -156,6 +190,12 @@ func (c *ChromemDB) HasCollection(ctx context.Context, name string) (bool, error
 	return exists, nil
 }
 
+// DropCollection removes a collection from the database.
+// Note: In ChromeM, collections are not explicitly dropped,
+// but rather overwritten when created again. This implementation
+// removes the collection from the local cache.
+//
+// Thread-safe: Protected by write lock.
 func (c *ChromemDB) DropCollection(ctx context.Context, name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -164,6 +204,18 @@ func (c *ChromemDB) DropCollection(ctx context.Context, name string) error {
 	return nil
 }
 
+// CreateCollection initializes a new collection in the database.
+// The function:
+// 1. Verifies collection doesn't exist in cache
+// 2. Configures OpenAI embeddings (requires OPENAI_API_KEY)
+// 3. Creates collection with empty metadata
+// 4. Verifies successful creation
+// 5. Updates local cache
+//
+// Note: ChromeM doesn't use schema information, so the schema
+// parameter is effectively ignored.
+//
+// Thread-safe: Protected by write lock.
 func (c *ChromemDB) CreateCollection(ctx context.Context, name string, schema Schema) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -206,6 +258,16 @@ func (c *ChromemDB) CreateCollection(ctx context.Context, name string, schema Sc
 	return nil
 }
 
+// Insert adds new records to a collection.
+// The function:
+// 1. Retrieves or creates the target collection
+// 2. Processes records in parallel for efficiency
+// 3. Creates ChromeM documents with:
+//    - Unique IDs
+//    - Metadata from record fields
+//    - Content from specified text field
+//
+// Thread-safe: Uses ChromeM's internal synchronization.
 func (c *ChromemDB) Insert(ctx context.Context, collectionName string, data []Record) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -306,16 +368,29 @@ func (c *ChromemDB) Insert(ctx context.Context, collectionName string, data []Re
 	return nil
 }
 
+// Flush ensures all data is persisted to storage.
+// This is a no-op for ChromeM as it handles persistence automatically,
+// but implemented to satisfy the database interface.
 func (c *ChromemDB) Flush(ctx context.Context, collectionName string) error {
 	// No explicit flush in chromem
 	return nil
 }
 
+// CreateIndex creates an index for the specified field.
+// This is a no-op for ChromeM as it manages its own indexing,
+// but implemented to satisfy the database interface.
 func (c *ChromemDB) CreateIndex(ctx context.Context, collectionName, field string, index Index) error {
 	// No explicit index creation in chromem
 	return nil
 }
 
+// LoadCollection prepares a collection for searching.
+// The function:
+// 1. Verifies collection exists
+// 2. Configures OpenAI embeddings
+// 3. Updates local collection cache
+//
+// Thread-safe: Protected by write lock.
 func (c *ChromemDB) LoadCollection(ctx context.Context, name string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -345,6 +420,16 @@ func (c *ChromemDB) LoadCollection(ctx context.Context, name string) error {
 	return nil
 }
 
+// Search performs vector similarity search on a collection.
+// The function:
+// 1. Retrieves the target collection
+// 2. Converts query vectors to float32
+// 3. Executes search with specified parameters
+// 4. Formats results to match interface requirements
+//
+// Note: ChromeM only supports cosine similarity for distance metric.
+//
+// Thread-safe: Uses ChromeM's internal synchronization.
 func (c *ChromemDB) Search(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}) ([]SearchResult, error) {
 	c.mu.RLock()
 
@@ -415,16 +500,22 @@ func (c *ChromemDB) Search(ctx context.Context, collectionName string, vectors m
 	return searchResults, nil
 }
 
+// HybridSearch performs combined vector and keyword search.
+// Currently not implemented for ChromeM - returns an error.
 func (c *ChromemDB) HybridSearch(ctx context.Context, collectionName string, vectors map[string]Vector, topK int, metricType string, searchParams map[string]interface{}, reranker interface{}) ([]SearchResult, error) {
 	// Not implemented for chromem
 	return nil, fmt.Errorf("hybrid search not implemented for chromem")
 }
 
+// SetColumnNames sets the list of columns to retrieve in search results.
+// This affects which fields are included in search result metadata.
 func (c *ChromemDB) SetColumnNames(names []string) {
 	c.columnNames = names
 }
 
-// Helper function to convert Vector to []float32
+// toFloat32Slice converts a Vector ([]float64) to []float32.
+// This is necessary because ChromeM uses float32 for vector operations,
+// while our interface uses float64 for broader compatibility.
 func toFloat32Slice(v Vector) []float32 {
 	result := make([]float32, len(v))
 	for i, val := range v {

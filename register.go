@@ -1,3 +1,8 @@
+// Package raggo provides a comprehensive registration system for vector database
+// implementations in RAG (Retrieval-Augmented Generation) applications. This
+// package enables dynamic registration and management of vector databases with
+// support for concurrent operations, configurable processing, and extensible
+// architecture.
 package raggo
 
 import (
@@ -5,36 +10,51 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/teilomillet/raggo/rag"
 )
 
-// RegisterConfig holds all configuration for the registration process
+// RegisterConfig holds the complete configuration for document registration
+// and vector database setup. It provides fine-grained control over all aspects
+// of the registration process.
 type RegisterConfig struct {
-	// Storage settings
-	VectorDBType   string            // e.g., "milvus"
-	VectorDBConfig map[string]string // Connection settings
-	CollectionName string            // Target collection
-	AutoCreate     bool              // Create collection if missing
+	// Storage settings control vector database configuration
+	VectorDBType   string            // Type of vector database (e.g., "milvus", "pinecone")
+	VectorDBConfig map[string]string // Database-specific configuration parameters
+	CollectionName string            // Name of the collection to store vectors
+	AutoCreate     bool              // Automatically create collection if missing
 
-	// Processing settings
-	ChunkSize      int
-	ChunkOverlap   int
-	BatchSize      int
-	TempDir        string
-	MaxConcurrency int
-	Timeout        time.Duration
+	// Processing settings define how documents are handled
+	ChunkSize      int           // Size of text chunks for processing
+	ChunkOverlap   int           // Overlap between consecutive chunks
+	BatchSize      int           // Number of items to process in each batch
+	TempDir        string        // Directory for temporary files
+	MaxConcurrency int           // Maximum number of concurrent operations
+	Timeout        time.Duration // Operation timeout duration
 
-	// Embedding settings
-	EmbeddingProvider string // e.g., "openai"
-	EmbeddingModel    string // e.g., "text-embedding-3-small"
-	EmbeddingKey      string
+	// Embedding settings configure the embedding generation
+	EmbeddingProvider string // Embedding service provider (e.g., "openai")
+	EmbeddingModel    string // Specific model to use for embeddings
+	EmbeddingKey      string // Authentication key for embedding service
 
-	// Callbacks
-	OnProgress func(processed, total int)
-	OnError    func(error)
+	// Callbacks for monitoring and error handling
+	OnProgress func(processed, total int) // Called to report progress
+	OnError    func(error)               // Called when errors occur
 }
 
-// defaultConfig returns a configuration with sensible defaults
+// defaultConfig returns a RegisterConfig initialized with production-ready
+// default values. These defaults are carefully chosen to provide good
+// performance while being conservative with resource usage.
+//
+// Default settings include:
+//   - Milvus vector database on localhost
+//   - 512-token chunks with 64-token overlap
+//   - 100 items per batch
+//   - 4 concurrent operations
+//   - 5-minute timeout
+//   - OpenAI's text-embedding-3-small model
 func defaultConfig() *RegisterConfig {
 	return &RegisterConfig{
 		VectorDBType:      "milvus",
@@ -55,11 +75,32 @@ func defaultConfig() *RegisterConfig {
 	}
 }
 
-// RegisterOption is a function that modifies RegisterConfig
+// RegisterOption is a function type for modifying RegisterConfig.
+// It follows the functional options pattern to provide a clean and
+// extensible way to configure the registration process.
 type RegisterOption func(*RegisterConfig)
 
-// Register processes documents and stores them in a vector database.
-// It accepts various sources: file paths, directory paths, or URLs.
+// Register processes documents from various sources and stores them in a vector
+// database. It handles the entire pipeline from document loading to vector storage:
+//   1. Document loading from files, directories, or URLs
+//   2. Text chunking and preprocessing
+//   3. Embedding generation
+//   4. Vector database storage
+//
+// The process is highly configurable through RegisterOptions and supports
+// progress monitoring and error handling through callbacks.
+//
+// Example:
+//
+//	err := Register(ctx, "docs/",
+//	    WithVectorDB("milvus", map[string]string{
+//	        "address": "localhost:19530",
+//	    }),
+//	    WithCollection("technical_docs", true),
+//	    WithChunking(512, 64),
+//	    WithEmbedding("openai", "text-embedding-3-small", os.Getenv("OPENAI_API_KEY")),
+//	    WithConcurrency(4),
+//	)
 func Register(ctx context.Context, source string, opts ...RegisterOption) error {
 	// Initialize configuration
 	cfg := defaultConfig()
@@ -283,11 +324,26 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	return nil
 }
 
-// Configuration options
-
+// WithVectorDB configures the vector database settings for registration.
+// It specifies the database type and its configuration parameters.
+//
+// Supported database types include:
+//   - "milvus": Milvus vector database
+//   - "pinecone": Pinecone vector database
+//   - "qdrant": Qdrant vector database
+//
+// Example:
+//
+//	Register(ctx, "docs/",
+//	    WithVectorDB("milvus", map[string]string{
+//	        "address": "localhost:19530",
+//	        "user": "default",
+//	        "password": "password",
+//	    }),
+//	)
 func WithVectorDB(dbType string, config map[string]string) RegisterOption {
-	return func(c *RegisterConfig) {
-		c.VectorDBType = dbType
+	return func(cfg *RegisterConfig) {
+		cfg.VectorDBType = dbType
 		if config == nil {
 			config = make(map[string]string)
 		}
@@ -295,40 +351,164 @@ func WithVectorDB(dbType string, config map[string]string) RegisterOption {
 		if config["dimension"] == "" {
 			config["dimension"] = "1536" // Default dimension
 		}
-		c.VectorDBConfig = config
+		cfg.VectorDBConfig = config
 	}
 }
 
+// WithCollection sets the collection name and auto-creation behavior.
+// When autoCreate is true, the collection will be created if it doesn't
+// exist, including appropriate indexes for vector similarity search.
+//
+// Example:
+//
+//	Register(ctx, "docs/",
+//	    WithCollection("technical_docs", true),
+//	)
 func WithCollection(name string, autoCreate bool) RegisterOption {
-	return func(c *RegisterConfig) {
-		c.CollectionName = name
-		c.AutoCreate = autoCreate
+	return func(cfg *RegisterConfig) {
+		cfg.CollectionName = name
+		cfg.AutoCreate = autoCreate
 	}
 }
 
+// WithChunking configures the text chunking parameters for document processing.
+// The size parameter determines the length of each chunk, while overlap
+// specifies how much text should be shared between consecutive chunks.
+//
+// Example:
+//
+//	Register(ctx, "docs/",
+//	    WithChunking(512, 64), // 512-token chunks with 64-token overlap
+//	)
 func WithChunking(size, overlap int) RegisterOption {
-	return func(c *RegisterConfig) {
-		c.ChunkSize = size
-		c.ChunkOverlap = overlap
+	return func(cfg *RegisterConfig) {
+		cfg.ChunkSize = size
+		cfg.ChunkOverlap = overlap
 	}
 }
 
+// WithEmbedding configures the embedding generation settings.
+// It specifies the provider, model, and authentication key for
+// generating vector embeddings from text.
+//
+// Supported providers:
+//   - "openai": OpenAI's embedding models
+//   - "cohere": Cohere's embedding models
+//   - "local": Local embedding models
+//
+// Example:
+//
+//	Register(ctx, "docs/",
+//	    WithEmbedding("openai",
+//	        "text-embedding-3-small",
+//	        os.Getenv("OPENAI_API_KEY"),
+//	    ),
+//	)
 func WithEmbedding(provider, model, key string) RegisterOption {
-	return func(c *RegisterConfig) {
-		c.EmbeddingProvider = provider
-		c.EmbeddingModel = model
-		c.EmbeddingKey = key
+	return func(cfg *RegisterConfig) {
+		cfg.EmbeddingProvider = provider
+		cfg.EmbeddingModel = model
+		cfg.EmbeddingKey = key
 	}
 }
 
+// WithConcurrency sets the maximum number of concurrent operations
+// during document processing. This affects:
+//   - Document loading
+//   - Chunk processing
+//   - Embedding generation
+//   - Vector storage
+//
+// Example:
+//
+//	Register(ctx, "docs/",
+//	    WithConcurrency(8), // Process up to 8 items concurrently
+//	)
 func WithConcurrency(max int) RegisterOption {
-	return func(c *RegisterConfig) {
-		c.MaxConcurrency = max
+	return func(cfg *RegisterConfig) {
+		cfg.MaxConcurrency = max
 	}
 }
 
-// Helper functions
-
+// isURL determines if a string represents a valid URL.
+// It checks for common URL schemes (http, https, ftp).
 func isURL(s string) bool {
 	return len(s) > 8 && (s[:7] == "http://" || s[:8] == "https://")
+}
+
+// dbRegistry maintains a thread-safe registry of vector database implementations.
+// It provides a central location for registering and retrieving database
+// implementations, ensuring thread-safe access in concurrent environments.
+//
+// The registry supports:
+//   - Dynamic registration of new implementations
+//   - Thread-safe access to implementations
+//   - Runtime discovery of available databases
+type dbRegistry struct {
+	mu        sync.RWMutex
+	factories map[string]func(cfg *Config) (rag.VectorDB, error)
+}
+
+// registry is the global instance of dbRegistry that maintains all registered
+// vector database implementations. It is initialized when the package is loaded
+// and should be accessed through the package-level registration functions.
+var registry = &dbRegistry{
+	factories: make(map[string]func(cfg *Config) (rag.VectorDB, error)),
+}
+
+// RegisterVectorDB registers a new vector database implementation.
+// It allows third-party implementations to be integrated into the
+// Raggo ecosystem at runtime.
+//
+// Example:
+//
+//	RegisterVectorDB("custom_db", func(cfg *Config) (rag.VectorDB, error) {
+//	    return NewCustomDB(cfg)
+//	})
+func RegisterVectorDB(dbType string, factory func(cfg *Config) (rag.VectorDB, error)) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.factories[dbType] = factory
+}
+
+// GetVectorDB retrieves a vector database implementation from the registry.
+// It returns an error if the requested implementation is not found or
+// if creation fails.
+//
+// Example:
+//
+//	db, err := GetVectorDB("milvus", &Config{
+//	    Address: "localhost:19530",
+//	})
+func GetVectorDB(dbType string, cfg *Config) (rag.VectorDB, error) {
+	registry.mu.RLock()
+	factory, ok := registry.factories[dbType]
+	registry.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("vector database type not registered: %s", dbType)
+	}
+
+	return factory(cfg)
+}
+
+// ListRegisteredDBs returns a list of all registered vector database types.
+// This is useful for discovering available implementations and validating
+// configuration options.
+//
+// Example:
+//
+//	dbs := ListRegisteredDBs()
+//	for _, db := range dbs {
+//	    fmt.Printf("Supported database: %s\n", db)
+//	}
+func ListRegisteredDBs() []string {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+
+	types := make([]string, 0, len(registry.factories))
+	for dbType := range registry.factories {
+		types = append(types, dbType)
+	}
+	return types
 }

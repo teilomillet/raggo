@@ -1,3 +1,25 @@
+// SimpleRAG provides a minimal, easy-to-use interface for RAG operations.
+// It simplifies the configuration and usage of the RAG system while maintaining
+// core functionality. This implementation is ideal for:
+//   - Quick prototyping
+//   - Simple document retrieval needs
+//   - Learning the RAG system
+//
+// Example usage:
+//
+//	config := raggo.DefaultConfig()
+//	config.APIKey = "your-api-key"
+//	
+//	rag, err := raggo.NewSimpleRAG(config)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	
+//	// Add documents
+//	err = rag.AddDocuments(context.Background(), "path/to/docs")
+//	
+//	// Search
+//	response, err := rag.Search(context.Background(), "your query")
 package raggo
 
 import (
@@ -12,32 +34,40 @@ import (
 	"github.com/teilomillet/gollm"
 )
 
-// SimpleRAG provides a minimal interface for RAG operations
+// SimpleRAG provides a minimal interface for RAG operations.
+// It encapsulates the core functionality while hiding complexity.
 type SimpleRAG struct {
-	retriever  *Retriever
-	collection string
-	apiKey     string
-	model      string
-	vectorDB   *VectorDB
-	llm        gollm.LLM
+	retriever  *Retriever        // Handles document retrieval
+	collection string            // Name of the vector collection
+	apiKey     string            // API key for services
+	model      string            // Embedding model name
+	vectorDB   *VectorDB         // Vector database connection
+	llm        gollm.LLM        // Language model interface
 }
 
-// SimpleRAGConfig holds configuration for SimpleRAG
+// SimpleRAGConfig holds configuration for SimpleRAG.
+// It provides essential configuration options while using
+// sensible defaults for other settings.
 type SimpleRAGConfig struct {
-	Collection   string
-	APIKey       string
-	Model        string
-	ChunkSize    int
-	ChunkOverlap int
-	TopK         int
-	MinScore     float64
-	LLMModel     string
-	DBType       string // Type of vector database to use (e.g., "milvus", "chromem")
-	DBAddress    string // Address for the vector database (e.g., "localhost:19530" for Milvus, "./data/chromem.db" for Chromem)
-	Dimension    int    // Dimension of the embedding vectors (e.g., 1536 for text-embedding-3-small)
+	Collection   string  // Name of the vector collection
+	APIKey       string  // API key for services (e.g., OpenAI)
+	Model        string  // Embedding model name
+	ChunkSize    int     // Size of text chunks in tokens
+	ChunkOverlap int     // Overlap between consecutive chunks
+	TopK         int     // Number of results to retrieve
+	MinScore     float64 // Minimum similarity score threshold
+	LLMModel     string  // Language model for text generation
+	DBType       string  // Type of vector database (e.g., "milvus", "chromem")
+	DBAddress    string  // Address for the vector database
+	Dimension    int     // Dimension of embedding vectors
 }
 
-// DefaultConfig returns a default configuration
+// DefaultConfig returns a default configuration for SimpleRAG.
+// It provides reasonable defaults for all settings:
+// - OpenAI's text-embedding-3-small for embeddings
+// - Milvus as the vector database
+// - Balanced chunk size and overlap
+// - Conservative similarity threshold
 func DefaultConfig() SimpleRAGConfig {
 	return SimpleRAGConfig{
 		Collection:   "documents",
@@ -53,7 +83,17 @@ func DefaultConfig() SimpleRAGConfig {
 	}
 }
 
-// NewSimpleRAG creates a new SimpleRAG instance with minimal configuration
+// NewSimpleRAG creates a new SimpleRAG instance with minimal configuration.
+// It performs the following setup:
+// 1. Validates and applies configuration
+// 2. Initializes the language model
+// 3. Sets up the vector database connection
+// 4. Prepares the retrieval system
+//
+// Returns an error if:
+// - API key is missing
+// - LLM initialization fails
+// - Vector database connection fails
 func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 	if config.APIKey == "" {
 		config.APIKey = os.Getenv("OPENAI_API_KEY")
@@ -155,7 +195,17 @@ func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 	}, nil
 }
 
-// AddDocuments adds documents to the vector database
+// AddDocuments processes and stores documents in the vector database.
+// The function:
+// 1. Validates the source path
+// 2. Processes documents into chunks
+// 3. Generates embeddings
+// 4. Stores vectors in the database
+//
+// The source parameter can be:
+// - A single file path
+// - A directory path (all documents will be processed)
+// - A glob pattern (e.g., "docs/*.pdf")
 func (s *SimpleRAG) AddDocuments(ctx context.Context, source string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -234,7 +284,15 @@ func (s *SimpleRAG) AddDocuments(ctx context.Context, source string) error {
 	return nil
 }
 
-// Search performs a semantic search query and generates a response
+// Search performs a semantic search query and generates a response.
+// The process:
+// 1. Embeds the query into a vector
+// 2. Finds similar documents in the vector database
+// 3. Uses the LLM to generate a response based on retrieved context
+//
+// Returns:
+// - A natural language response incorporating retrieved information
+// - An error if the search or response generation fails
 func (s *SimpleRAG) Search(ctx context.Context, query string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -306,7 +364,11 @@ If the information isn't found in the provided context, please say so clearly.`,
 	return resp, nil
 }
 
-// Close releases resources
+// Close releases all resources held by the SimpleRAG instance.
+// This includes:
+// - Vector database connection
+// - Language model resources
+// - Any temporary files
 func (s *SimpleRAG) Close() error {
 	if s.vectorDB != nil {
 		s.vectorDB.Close()

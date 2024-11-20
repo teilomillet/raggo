@@ -1,3 +1,4 @@
+// Package rag provides retrieval-augmented generation capabilities.
 package rag
 
 import (
@@ -8,13 +9,20 @@ import (
 	"sync"
 )
 
-// BM25Parameters holds the parameters for BM25 scoring
+// BM25Parameters holds the parameters for BM25 scoring algorithm.
+// BM25 (Best Match 25) is a probabilistic ranking function that estimates
+// the relevance of documents to a given search query based on term frequency,
+// inverse document frequency, and document length normalization.
 type BM25Parameters struct {
-	K1 float64 // Term saturation parameter (typically 1.2-2.0)
-	B  float64 // Length normalization parameter (typically 0.75)
+	K1 float64 // K1 controls term frequency saturation (1.2-2.0 typical)
+	B  float64 // B controls document length normalization (0.75 typical)
 }
 
-// DefaultBM25Parameters returns default BM25 parameters
+// DefaultBM25Parameters returns recommended BM25 parameters based on
+// empirical research. These values work well for most general-purpose
+// text search applications:
+// - K1 = 1.5: Balanced term frequency saturation
+// - B = 0.75: Standard length normalization
 func DefaultBM25Parameters() BM25Parameters {
 	return BM25Parameters{
 		K1: 1.5,
@@ -22,21 +30,31 @@ func DefaultBM25Parameters() BM25Parameters {
 	}
 }
 
-// BM25Index implements a sparse index using BM25 scoring
+// BM25Index implements a sparse retrieval index using the BM25 ranking algorithm.
+// It provides thread-safe document indexing and retrieval with the following features:
+// - Efficient term-based document scoring
+// - Document length normalization
+// - Configurable text preprocessing
+// - Metadata storage and retrieval
+// - Thread-safe operations
 type BM25Index struct {
-	mu            sync.RWMutex
-	docs          map[int64]string                    // Document content by ID
-	metadata      map[int64]map[string]interface{}    // Document metadata by ID
+	mu            sync.RWMutex                        // Protects concurrent access to index
+	docs          map[int64]string                    // Stores original document content
+	metadata      map[int64]map[string]interface{}    // Stores document metadata
 	termFreq      map[int64]map[string]int           // Term frequency per document
 	docFreq       map[string]int                      // Document frequency per term
 	docLength     map[int64]int                       // Length of each document
 	avgDocLength  float64                             // Average document length
 	totalDocs     int                                 // Total number of documents
-	params        BM25Parameters                      // BM25 parameters
+	params        BM25Parameters                      // BM25 scoring parameters
 	preprocessor  func(string) []string               // Text preprocessing function
 }
 
-// NewBM25Index creates a new BM25 index with default parameters
+// NewBM25Index creates a new BM25 index with default parameters.
+// The index is initialized with:
+// - Default BM25 parameters (K1=1.5, B=0.75)
+// - Basic preprocessor (lowercase, whitespace tokenization)
+// - Empty document store and statistics
 func NewBM25Index() *BM25Index {
 	return &BM25Index{
 		docs:         make(map[int64]string),
@@ -49,14 +67,28 @@ func NewBM25Index() *BM25Index {
 	}
 }
 
-// defaultPreprocessor implements basic text preprocessing
+// defaultPreprocessor implements basic text preprocessing by:
+// 1. Converting text to lowercase
+// 2. Splitting on whitespace
+// Users can replace this with custom preprocessing via SetPreprocessor
 func defaultPreprocessor(text string) []string {
 	// Convert to lowercase and split into words
 	words := strings.Fields(strings.ToLower(text))
 	return words
 }
 
-// Add adds a document to the index
+// Add indexes a new document with the given ID, content, and metadata.
+// This operation is thread-safe and automatically updates all relevant
+// index statistics including term frequencies, document lengths, and
+// collection-wide averages.
+//
+// Parameters:
+//   - ctx: Context for potential future extensions
+//   - id: Unique document identifier
+//   - content: Document text content
+//   - metadata: Optional document metadata
+//
+// Returns error if the operation fails (currently always nil).
 func (idx *BM25Index) Add(ctx context.Context, id int64, content string, metadata map[string]interface{}) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -90,7 +122,17 @@ func (idx *BM25Index) Add(ctx context.Context, id int64, content string, metadat
 	return nil
 }
 
-// Remove removes a document from the index
+// Remove deletes a document from the index and updates all relevant statistics.
+// This operation is thread-safe and maintains index consistency by:
+// - Updating document frequencies
+// - Removing document data
+// - Recalculating collection statistics
+//
+// Parameters:
+//   - ctx: Context for potential future extensions
+//   - id: ID of document to remove
+//
+// Returns error if the operation fails (currently always nil).
 func (idx *BM25Index) Remove(ctx context.Context, id int64) error {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -126,7 +168,18 @@ func (idx *BM25Index) Remove(ctx context.Context, id int64) error {
 	return nil
 }
 
-// Search performs BM25 search on the index
+// Search performs BM25-based retrieval on the index.
+// The BM25 score for a document D and query Q is calculated as:
+// score(D,Q) = Σ IDF(qi) * (f(qi,D) * (k1 + 1)) / (f(qi,D) + k1 * (1 - b + b * |D|/avgdl))
+//
+// Parameters:
+//   - ctx: Context for potential future extensions
+//   - query: Search query text
+//   - topK: Maximum number of results to return
+//
+// Returns:
+//   - []SearchResult: Sorted results by BM25 score
+//   - error: Error if search fails (currently always nil)
 func (idx *BM25Index) Search(ctx context.Context, query string, topK int) ([]SearchResult, error) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -177,14 +230,24 @@ func (idx *BM25Index) Search(ctx context.Context, query string, topK int) ([]Sea
 	return results, nil
 }
 
-// SetParameters updates the BM25 parameters
+// SetParameters updates the BM25 scoring parameters.
+// This operation is thread-safe and affects all subsequent searches.
+// Typical values:
+// - K1: 1.2-2.0 (higher values increase term frequency influence)
+// - B: 0.75 (lower values reduce length normalization effect)
 func (idx *BM25Index) SetParameters(params BM25Parameters) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.params = params
 }
 
-// SetPreprocessor sets a custom text preprocessing function
+// SetPreprocessor sets a custom text preprocessing function.
+// The preprocessor converts raw text into terms for indexing and searching.
+// Custom preprocessors can implement:
+// - Stopword removal
+// - Stemming/lemmatization
+// - N-gram generation
+// - Special character handling
 func (idx *BM25Index) SetPreprocessor(preprocessor func(string) []string) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()

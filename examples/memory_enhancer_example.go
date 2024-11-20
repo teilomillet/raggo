@@ -1,3 +1,49 @@
+// This example demonstrates how to build an intelligent chatbot using Raggo's memory context
+// system. The chatbot can understand and discuss technical documentation while maintaining
+// conversation context and providing accurate, contextually relevant responses.
+//
+// Key Features Demonstrated:
+//   1. Memory Context Integration: Shows how to create and configure a memory context
+//   2. Document Loading: Demonstrates loading and storing technical documentation
+//   3. Interactive Chat: Implements a chat loop with context-aware responses
+//   4. Dynamic Memory Management: Shows how to manage and update conversation history
+//   5. Vector Database Integration: Demonstrates Milvus setup for efficient retrieval
+//
+// Prerequisites:
+//   - OpenAI API key set in OPENAI_API_KEY environment variable
+//   - Milvus vector database running on localhost:19530
+//   - Technical documentation files in examples/chat/docs/
+//
+// Usage:
+//   1. Set your OpenAI API key:
+//      export OPENAI_API_KEY='your-api-key'
+//
+//   2. Run the example:
+//      go run examples/memory_enhancer_example.go
+//
+//   3. Ask questions about the MountainPass case study:
+//      - "What is the PressureValve system?"
+//      - "How did they handle Black Friday traffic?"
+//      - "What were the key architectural decisions?"
+//
+// The example will:
+//   1. Initialize the LLM and memory context
+//   2. Load technical documentation into the memory system
+//   3. Start an interactive chat loop where you can ask questions
+//   4. Enhance each prompt with relevant context from memory
+//   5. Store conversation history for future context
+//
+// Example Output:
+//   Q: What is MountainPass's PressureValve system?
+//   A: The PressureValve system is MountainPass's innovative traffic management
+//      solution that helped them handle 10x normal traffic during Black Friday...
+//
+// Note: This example uses the following Raggo features:
+//   - Memory context creation and configuration
+//   - Document storage and retrieval
+//   - Prompt enhancement with relevant context
+//   - Dynamic memory management
+//   - Vector database integration
 package main
 
 import (

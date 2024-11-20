@@ -1,4 +1,7 @@
-// rag/load.go
+// Package rag provides document loading functionality for the Raggo framework.
+// The loader component handles various input sources including local files,
+// directories, and URLs, with support for concurrent operations and
+// configurable timeouts.
 package rag
 
 import (
@@ -10,15 +13,25 @@ import (
 	"time"
 )
 
-// Loader represents the internal loader implementation
+// Loader represents the internal loader implementation.
+// It provides methods for loading documents from various sources
+// with configurable HTTP client, timeout settings, and temporary
+// storage management. The loader is designed to be thread-safe
+// and can handle concurrent loading operations.
 type Loader struct {
-	client  *http.Client
-	timeout time.Duration
-	tempDir string
-	logger  Logger
+	client  *http.Client  // HTTP client for URL downloads
+	timeout time.Duration // Timeout for operations
+	tempDir string        // Directory for temporary files
+	logger  Logger        // Logger for operation tracking
 }
 
-// NewLoader creates a new Loader with the given options
+// NewLoader creates a new Loader with the given options.
+// It initializes a loader with default settings and applies
+// any provided options. Default settings include:
+// - Standard HTTP client
+// - 30-second timeout
+// - System temporary directory
+// - Global logger instance
 func NewLoader(opts ...LoaderOption) *Loader {
 	l := &Loader{
 		client:  http.DefaultClient,
@@ -34,37 +47,60 @@ func NewLoader(opts ...LoaderOption) *Loader {
 	return l
 }
 
-// LoaderOption is a functional option for configuring a Loader
+// LoaderOption is a functional option for configuring a Loader.
+// It follows the functional options pattern to provide a clean
+// and extensible way to configure the loader.
 type LoaderOption func(*Loader)
 
-// WithHTTPClient sets a custom HTTP client for the Loader
+// WithHTTPClient sets a custom HTTP client for the Loader.
+// This allows customization of the HTTP client used for URL downloads,
+// enabling features like custom transport settings, proxies, or
+// authentication mechanisms.
 func WithHTTPClient(client *http.Client) LoaderOption {
 	return func(l *Loader) {
 		l.client = client
 	}
 }
 
-// WithTimeout sets a custom timeout for the Loader
+// WithTimeout sets a custom timeout for the Loader.
+// This timeout applies to all operations including:
+// - URL downloads
+// - File operations
+// - Directory traversal
 func WithTimeout(timeout time.Duration) LoaderOption {
 	return func(l *Loader) {
 		l.timeout = timeout
 	}
 }
 
-// WithTempDir sets the temporary directory for downloaded files
+// WithTempDir sets the temporary directory for downloaded files.
+// This directory is used to store:
+// - Downloaded files from URLs
+// - Copies of local files for processing
+// - Temporary files during directory operations
 func WithTempDir(dir string) LoaderOption {
 	return func(l *Loader) {
 		l.tempDir = dir
 	}
 }
 
-// WithLogger sets a custom logger for the Loader
+// WithLogger sets a custom logger for the Loader.
+// The logger is used to track operations and debug issues
+// across all loading operations.
 func WithLogger(logger Logger) LoaderOption {
 	return func(l *Loader) {
 		l.logger = logger
 	}
 }
 
+// LoadURL downloads a file from the given URL and stores it in the temporary directory.
+// The function:
+// 1. Creates a context with the configured timeout
+// 2. Downloads the file using the HTTP client
+// 3. Stores the file in the temporary directory
+// 4. Returns the path to the downloaded file
+//
+// The downloaded file's name is derived from the URL's base name.
 func (l *Loader) LoadURL(ctx context.Context, url string) (string, error) {
 	l.logger.Debug("Starting LoadURL", "url", url)
 	ctx, cancel := context.WithTimeout(ctx, l.timeout)
@@ -103,6 +139,13 @@ func (l *Loader) LoadURL(ctx context.Context, url string) (string, error) {
 	return destPath, nil
 }
 
+// LoadFile copies a file to the temporary directory and returns its path.
+// The function:
+// 1. Verifies the source file exists
+// 2. Creates a copy in the temporary directory
+// 3. Returns the path to the copied file
+//
+// This ensures that the original file remains unchanged during processing.
 func (l *Loader) LoadFile(ctx context.Context, path string) (string, error) {
 	l.logger.Debug("Starting LoadFile", "path", path)
 
@@ -139,6 +182,14 @@ func (l *Loader) LoadFile(ctx context.Context, path string) (string, error) {
 	return destPath, nil
 }
 
+// LoadDir recursively processes all files in a directory.
+// The function:
+// 1. Walks through the directory tree
+// 2. Processes each file encountered
+// 3. Returns paths to all processed files
+//
+// Files that fail to load are logged but don't stop the process.
+// The function continues with the next file on error.
 func (l *Loader) LoadDir(ctx context.Context, dir string) ([]string, error) {
 	l.logger.Debug("Starting LoadDir", "dir", dir)
 

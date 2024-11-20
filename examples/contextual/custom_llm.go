@@ -30,7 +30,7 @@ func main() {
 	// Create RAG with custom LLM
 	config := &raggo.ContextualRAGConfig{
 		Collection: "my_contextual_docs",
-		LLM:       llm,  // Use our custom LLM instance
+		LLM:        llm, // Use our custom LLM instance
 	}
 
 	rag, err := raggo.NewContextualRAG(config)
