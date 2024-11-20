@@ -1,6 +1,6 @@
 # Raggo - Retrieval Augmented Generation Library
 
-A powerful and flexible RAG (Retrieval Augmented Generation) library for Go, designed to make document processing and context-aware AI interactions simple and efficient.
+A flexible RAG (Retrieval Augmented Generation) library for Go, designed to make document processing and context-aware AI interactions simple and efficient.
 
 ## Quick Start
 
