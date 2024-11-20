@@ -121,10 +121,7 @@ Environment variables (take precedence over config files):
 
 #### Prerequisites
 ```bash
-# Install Milvus
-docker run -d --name milvus -p 19530:19530 milvusdb/milvus:latest
-
-# Set OpenAI API key
+# Set API key
 export OPENAI_API_KEY=your-api-key
 
 # Install Raggo
