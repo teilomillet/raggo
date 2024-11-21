@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -14,13 +15,14 @@ func main() {
 	raggo.SetLogLevel(raggo.LogLevelInfo)
 
 	parser := raggo.NewParser()
+	loader := raggo.NewLoader()
 
 	fmt.Println("Running examples with INFO level logging:")
-	runExamples(parser)
+	runExamples(parser, loader)
 
 }
 
-func runExamples(parser raggo.Parser) {
+func runExamples(parser raggo.Parser, loader raggo.Loader) {
 	// Example 1: Parse PDF file
 	pdfExample(parser)
 
@@ -28,7 +30,7 @@ func runExamples(parser raggo.Parser) {
 	textExample(parser)
 
 	// Example 3: Parse directory
-	dirExample(parser)
+	dirExample(loader)
 }
 
 func pdfExample(parser raggo.Parser) {
@@ -71,34 +73,21 @@ func textExample(parser raggo.Parser) {
 	fmt.Printf("Text file parsed. Content length: %d\n", len(doc.Content))
 }
 
-func dirExample(parser raggo.Parser) {
-	fmt.Println("Example 3: Parsing directory")
+func dirExample(loader raggo.Loader) {
+	fmt.Println("Example 3: Loading directory")
 	wd, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("Failed to get working directory: %v", err)
 	}
 	testDataDir := filepath.Join(wd, "testdata")
 
-	fileCount := 0
-	err = filepath.Walk(testDataDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			_, err := parser.Parse(path)
-			if err != nil {
-				fmt.Printf("Error parsing %s: %v\n", path, err)
-			} else {
-				fileCount++
-			}
-		}
-		return nil
-	})
-
+	paths, err := loader.LoadDir(context.Background(), testDataDir)
 	if err != nil {
-		log.Printf("Error walking directory: %v\n", err)
+		log.Printf("Error loading directory: %v\n", err)
 	} else {
-		fmt.Printf("Parsed %d files in directory\n", fileCount)
+		fmt.Printf("Loaded %d files from directory\n", len(paths))
+		for i, path := range paths {
+			fmt.Printf("%d: %s\n", i+1, path)
+		}
 	}
 }
-

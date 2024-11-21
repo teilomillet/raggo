@@ -33,9 +33,9 @@ func main() {
 
 	// Create a new Embedder
 	embedder, err := raggo.NewEmbedder(
-		raggo.SetProvider("openai"),
-		raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
-		raggo.SetModel("text-embedding-3-small"),
+		raggo.SetEmbedderProvider("openai"),
+		raggo.SetEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
+		raggo.SetEmbedderModel("text-embedding-3-small"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
@@ -277,4 +277,3 @@ func truncateString(s string, length int) string {
 	}
 	return s[:length-3] + "..."
 }
-

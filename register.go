@@ -114,7 +114,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	Debug("Creating loader")
 	loader := NewLoader(
 		SetTempDir(cfg.TempDir),
-		WithLoaderTimeout(cfg.Timeout),
+		SetLoaderTimeout(cfg.Timeout),
 	)
 
 	// Create chunker
@@ -130,9 +130,9 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	// Create embedder
 	Debug("Creating embedder")
 	embedder, err := NewEmbedder(
-		WithEmbedderProvider(cfg.EmbeddingProvider),
-		WithEmbedderModel(cfg.EmbeddingModel),
-		WithEmbedderAPIKey(cfg.EmbeddingKey),
+		SetEmbedderProvider(cfg.EmbeddingProvider),
+		SetEmbedderModel(cfg.EmbeddingModel),
+		SetEmbedderAPIKey(cfg.EmbeddingKey),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create embedder: %w", err)

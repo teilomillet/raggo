@@ -77,9 +77,9 @@ func main() {
 
 	debug("Initializing embedder...")
 	embedder, err := raggo.NewEmbedder(
-		raggo.WithEmbedderProvider("openai"),
-		raggo.WithEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
-		raggo.WithEmbedderModel("text-embedding-3-small"),
+		raggo.SetEmbedderProvider("openai"),
+		raggo.SetEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
+		raggo.SetEmbedderModel("text-embedding-3-small"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)

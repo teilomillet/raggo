@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkoukk/tiktoken-go"
+	"github.com/teilomillet/gollm"
 	"github.com/teilomillet/raggo"
 	"golang.org/x/time/rate"
 )
@@ -17,6 +19,9 @@ import (
 const (
 	embeddingTPM = 5_000_000 // Tokens per minute for text-embedding-3-small
 	embeddingRPM = 5_000     // Requests per minute for text-embedding-3-small
+	defaultTimeout = 5 * time.Minute
+	defaultBatchSize = 10
+	defaultCollectionName = "pdf_embeddings"  // Add default collection name
 )
 
 type RateLimitedEmbedder struct {
@@ -90,7 +95,7 @@ func main() {
 	}
 
 	// Initialize components
-	parser := raggo.NewParser()
+	parser := raggo.PDFParser()  // Initialize the PDF parser
 	chunker, err := raggo.NewChunker(
 		raggo.ChunkSize(512),
 		raggo.ChunkOverlap(64),
@@ -100,9 +105,9 @@ func main() {
 	}
 
 	embedder, err := raggo.NewEmbedder(
-		raggo.SetProvider("openai"),
-		raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
-		raggo.SetModel("text-embedding-3-small"),
+		raggo.SetEmbedderProvider("openai"),
+		raggo.SetEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
+		raggo.SetEmbedderModel("text-embedding-3-small"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
@@ -113,32 +118,56 @@ func main() {
 		log.Fatalf("Failed to create rate-limited embedder: %v", err)
 	}
 
-	// Create a new ConcurrentPDFLoader
-	loader := raggo.NewConcurrentPDFLoader(
-		raggo.SetTimeout(5*time.Minute), // Increased timeout
-		raggo.SetTempDir(targetDir),
-	)
+	// Create LLM and VectorDB
+	llm, err := gollm.NewLLM( /* LLM configuration */ )
+	if err != nil {
+		log.Fatalf("Failed to create LLM: %v", err)
+	}
+
+	vectorDB, err := raggo.NewVectorDB( /* VectorDB configuration */ )
+	if err != nil {
+		log.Fatalf("Failed to create VectorDB: %v", err)
+	}
 
 	// Run the benchmark
-	desiredCount := 100 // Adjust this number as needed
-	benchmarkPDFProcessing(loader, parser, chunker, rateLimitedEmbedder, sourceDir, targetDir, desiredCount)
+	benchmarkPDFProcessing(
+		parser,                    // parser
+		chunker,                      // chunker
+		rateLimitedEmbedder.embedder, // embedder
+		llm,                          // llm
+		vectorDB,                     // vectorDB
+		sourceDir,                    // sourceDir
+		targetDir,                    // targetDir
+	)
 }
 
-func benchmarkPDFProcessing(loader raggo.ConcurrentPDFLoader, parser raggo.Parser, chunker raggo.Chunker, embedder *RateLimitedEmbedder, sourceDir, targetDir string, desiredCount int) {
-	fmt.Printf("Starting PDF processing benchmark with %d files...\n", desiredCount)
+func benchmarkPDFProcessing(
+	parser raggo.Parser,
+	chunker raggo.Chunker,
+	embedder raggo.Embedder,
+	llm gollm.LLM,
+	vectorDB *raggo.VectorDB,
+	sourceDir string,
+	targetDir string,
+) {
+	fmt.Printf("Starting PDF processing benchmark...\n")
 
 	start := time.Now()
 
 	// Load PDFs
 	loadStart := time.Now()
-	loadedFiles, err := loader.LoadPDFsConcurrent(context.Background(), sourceDir, targetDir, desiredCount)
+	loader := raggo.NewConcurrentPDFLoader(
+		raggo.SetLoaderTimeout(5*time.Minute), // Increased timeout
+		raggo.SetTempDir(targetDir),
+	)
+	loadedFiles, err := loader.LoadPDFsConcurrent(context.Background(), sourceDir, targetDir, 100)
 	loadDuration := time.Since(loadStart)
 
 	if err != nil {
 		log.Printf("Warning: Encountered errors while loading PDF files: %v", err)
 	}
 
-	fmt.Printf("Attempted to load %d PDF files, successfully loaded %d in %v\n", desiredCount, len(loadedFiles), loadDuration)
+	fmt.Printf("Attempted to load PDF files, successfully loaded %d in %v\n", len(loadedFiles), loadDuration)
 
 	if len(loadedFiles) == 0 {
 		log.Fatalf("No files were successfully loaded. Cannot continue benchmark.")
@@ -149,21 +178,31 @@ func benchmarkPDFProcessing(loader raggo.ConcurrentPDFLoader, parser raggo.Parse
 	processStart := time.Now()
 	errorCount := 0
 	successCount := 0
-	totalTokens := 0
-	embedCount := 0
+	var totalTokens int64
+	var embedCount int64
+	var totalChunks int64
 
 	for _, file := range loadedFiles {
 		wg.Add(1)
 		go func(filePath string) {
 			defer wg.Done()
-			tokens, embeds, err := processAndEmbedPDF(parser, chunker, embedder, filePath)
+			tokens, embeds, chunks, err := processAndEmbedPDF(
+				parser,
+				chunker,
+				embedder,
+				llm,
+				vectorDB,
+				defaultCollectionName,  // Add collection name
+				filePath,
+			)
 			if err != nil {
 				log.Printf("Error processing %s: %v", filePath, err)
 				errorCount++
 			} else {
 				successCount++
-				totalTokens += tokens
-				embedCount += embeds
+				atomic.AddInt64(&totalTokens, int64(tokens))
+				atomic.AddInt64(&embedCount, int64(embeds))
+				atomic.AddInt64(&totalChunks, int64(chunks))
 			}
 		}(file)
 	}
@@ -175,7 +214,7 @@ func benchmarkPDFProcessing(loader raggo.ConcurrentPDFLoader, parser raggo.Parse
 
 	// Print benchmark results
 	fmt.Printf("\nBenchmark Results:\n")
-	fmt.Printf("Total files attempted: %d\n", desiredCount)
+	fmt.Printf("Total files attempted: %d\n", len(loadedFiles))
 	fmt.Printf("Files successfully loaded: %d\n", len(loadedFiles))
 	fmt.Printf("Files successfully processed: %d\n", successCount)
 	fmt.Printf("Files with processing errors: %d\n", errorCount)
@@ -184,6 +223,7 @@ func benchmarkPDFProcessing(loader raggo.ConcurrentPDFLoader, parser raggo.Parse
 	fmt.Printf("Total time: %v\n", totalDuration)
 	fmt.Printf("Total tokens processed: %d\n", totalTokens)
 	fmt.Printf("Total embeddings created: %d\n", embedCount)
+	fmt.Printf("Total chunks processed: %d\n", totalChunks)
 	if successCount > 0 {
 		fmt.Printf("Average time per successfully processed file: %v\n", totalDuration/time.Duration(successCount))
 	}
@@ -191,31 +231,39 @@ func benchmarkPDFProcessing(loader raggo.ConcurrentPDFLoader, parser raggo.Parse
 	fmt.Printf("Average embeddings per second: %.2f\n", float64(embedCount)/processDuration.Seconds())
 }
 
-func processAndEmbedPDF(parser raggo.Parser, chunker raggo.Chunker, embedder *RateLimitedEmbedder, filePath string) (int, int, error) {
+func processAndEmbedPDF(
+	parser raggo.Parser,
+	chunker raggo.Chunker,
+	embedder raggo.Embedder,
+	llm gollm.LLM,
+	vectorDB *raggo.VectorDB,
+	collectionName string,
+	filePath string,
+) (int, int, int, error) {
 	// Parse the PDF
 	doc, err := parser.Parse(filePath)
 	if err != nil {
-		return 0, 0, fmt.Errorf("error parsing PDF: %w", err)
+		return 0, 0, 0, fmt.Errorf("error parsing PDF: %w", err)
 	}
 
 	// Chunk the content
 	chunks := chunker.Chunk(doc.Content)
-
 	totalTokens := 0
 	embedCount := 0
 
 	// Embed each chunk
 	for _, chunk := range chunks {
-		tokens := embedder.tokenCounter.Count(chunk.Text)
-		totalTokens += tokens
+		tokens := len(chunk.Text)
 
 		_, err := embedder.Embed(context.Background(), chunk.Text)
 		if err != nil {
-			return totalTokens, embedCount, fmt.Errorf("error embedding chunk: %w", err)
+			return totalTokens, embedCount, len(chunks), fmt.Errorf("error embedding chunk: %w", err)
 		}
+
 		embedCount++
+		totalTokens += tokens
 	}
 
 	log.Printf("Processed and embedded %s: %d characters, %d chunks, %d tokens", filePath, len(doc.Content), len(chunks), totalTokens)
-	return totalTokens, embedCount, nil
+	return totalTokens, embedCount, len(chunks), nil
 }

@@ -30,9 +30,9 @@ func main() {
 
 	// Create a new Embedder
 	embedder, err := raggo.NewEmbedder(
-		raggo.SetProvider("openai"),
-		raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")), // Make sure to set this environment variable
-		raggo.SetModel("text-embedding-3-small"),
+		raggo.SetEmbedderProvider("openai"),
+		raggo.SetEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")), // Make sure to set this environment variable
+		raggo.SetEmbedderModel("text-embedding-3-small"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
@@ -76,7 +76,7 @@ func main() {
 		}
 		fmt.Printf("Embedded Chunk %d:\n", i+1)
 		fmt.Printf("  Text: %s\n", truncateString(chunk.Text, 50))
-		fmt.Printf("  Embedding Vector Length: %d\n", len(chunk.Embedding))
+		fmt.Printf("  Embedding Vector Length: %d\n", len(chunk.Embeddings["default"]))
 		fmt.Printf("  Metadata: %v\n", chunk.Metadata)
 		fmt.Println()
 	}

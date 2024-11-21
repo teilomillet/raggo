@@ -17,7 +17,7 @@ func main() {
 
 	// Create a new Loader with custom options
 	loader := raggo.NewLoader(
-		raggo.SetTimeout(1*time.Minute),
+		raggo.SetLoaderTimeout(1*time.Minute),
 		raggo.SetTempDir(os.TempDir()),
 	)
 
@@ -99,4 +99,3 @@ func dirExample(loader raggo.Loader) {
 		}
 	}
 }
-

@@ -17,7 +17,7 @@ func main() {
 
 	// Create a new ConcurrentPDFLoader with custom options
 	loader := raggo.NewConcurrentPDFLoader(
-		raggo.SetTimeout(1*time.Minute),
+		raggo.SetLoaderTimeout(1*time.Minute),
 		raggo.SetTempDir(os.TempDir()),
 	)
 
@@ -51,4 +51,3 @@ func main() {
 		fmt.Printf("%d. %s\n", i+1, file)
 	}
 }
-

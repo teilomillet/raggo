@@ -86,7 +86,7 @@ func WithHTTPClient(client *http.Client) LoaderOption {
 	return rag.WithHTTPClient(client)
 }
 
-// WithLoaderTimeout sets a custom timeout for all loader operations.
+// SetLoaderTimeout sets a custom timeout for all loader operations.
 // The timeout applies to:
 //   - URL downloads
 //   - File operations
@@ -95,8 +95,8 @@ func WithHTTPClient(client *http.Client) LoaderOption {
 // Example:
 //
 //	// Set a 2-minute timeout for all operations
-//	loader := NewLoader(WithLoaderTimeout(2 * time.Minute))
-func WithLoaderTimeout(timeout time.Duration) LoaderOption {
+//	loader := NewLoader(SetLoaderTimeout(2 * time.Minute))
+func SetLoaderTimeout(timeout time.Duration) LoaderOption {
 	return rag.WithTimeout(timeout)
 }
 
@@ -127,7 +127,7 @@ func SetTempDir(dir string) LoaderOption {
 //
 //	loader := NewLoader(
 //	    WithHTTPClient(customClient),
-//	    WithLoaderTimeout(time.Minute),
+//	    SetLoaderTimeout(time.Minute),
 //	    SetTempDir("/custom/temp"),
 //	)
 func NewLoader(opts ...LoaderOption) Loader {

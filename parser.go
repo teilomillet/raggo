@@ -4,6 +4,8 @@
 package raggo
 
 import (
+	"context"
+
 	"github.com/teilomillet/raggo/rag"
 )
 
@@ -33,24 +35,211 @@ type Document = rag.Document
 //   - Content extraction
 //   - Metadata collection
 //   - Error handling
+//
+// Example:
+//
+//	// Create a new parser with default settings
+//	parser := NewParser()
+//
+//	// Parse a document
+//	doc, err := parser.Parse("document.pdf")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Printf("Content: %s\n", doc.Content)
 type Parser interface {
 	// Parse processes a file and returns its content and metadata.
 	// Returns an error if the parsing operation fails.
 	Parse(filePath string) (Document, error)
 }
 
-// NewParser creates a new Parser with default settings and handlers.
-// The default configuration includes:
-//   - PDF document support
-//   - Plain text file support
-//   - Extension-based file type detection
+// parserWrapper combines Parser and Loader capabilities into a single type.
+// It implements both the Parser interface for document parsing and provides
+// loading functionality through an embedded rag.Loader.
+//
+// The wrapper uses dependency injection to allow customization of both
+// the parser and loader components, making it highly configurable and
+// testable.
+//
+// Example usage with custom loader:
+//
+//	customLoader := rag.NewLoader(
+//	    rag.WithTimeout(time.Minute),
+//	    rag.WithTempDir("/custom/temp"),
+//	)
+//	
+//	parser := NewParser(
+//	    WithLoader(customLoader),
+//	)
+type parserWrapper struct {
+    parser Parser       // Core parsing implementation
+    loader *rag.Loader // Document loading capabilities
+}
+
+// ParserOption defines functional options for configuring a Parser.
+// This follows the functional options pattern, allowing flexible and
+// extensible configuration of the parser without breaking existing code.
+//
+// Custom options can be created by implementing this function type
+// and modifying the parserWrapper fields as needed.
+//
+// Example creating a custom option:
+//
+//	func WithCustomTimeout(timeout time.Duration) ParserOption {
+//	    return func(pw *parserWrapper) {
+//	        pw.loader = rag.NewLoader(rag.WithTimeout(timeout))
+//	    }
+//	}
+type ParserOption func(*parserWrapper)
+
+// WithLoader injects a custom loader into the parser.
+// This option allows you to provide a pre-configured rag.Loader
+// instance with custom settings for timeout, temporary directory,
+// HTTP client, or other loader-specific configurations.
 //
 // Example:
 //
+//	customLoader := rag.NewLoader(
+//	    rag.WithTimeout(time.Minute),
+//	    rag.WithTempDir("/custom/temp"),
+//	)
+//	
+//	parser := NewParser(
+//	    WithLoader(customLoader),
+//	)
+func WithLoader(loader *rag.Loader) ParserOption {
+    return func(pw *parserWrapper) {
+        pw.loader = loader
+    }
+}
+
+// NewParser creates a new Parser with the given options.
+// It initializes a parserWrapper with default settings and applies
+// any provided configuration options. The resulting parser implements
+// both document parsing and loading capabilities.
+//
+// Default configuration includes:
+//   - Standard rag.Loader with default timeout and temp directory
+//   - Default parser manager for handling various file types
+//   - Built-in support for common file formats
+//
+// Example:
+//
+//	// Create parser with default settings
 //	parser := NewParser()
+//
+//	// Create parser with custom loader
+//	parser := NewParser(
+//	    WithLoader(customLoader),
+//	)
+//
+//	// Create parser with multiple options
+//	parser := NewParser(
+//	    WithLoader(customLoader),
+//	    WithCustomOption(...),
+//	)
+func NewParser(opts ...ParserOption) Parser {
+    pw := &parserWrapper{
+        parser: rag.NewParserManager(),
+        loader: rag.NewLoader(),
+    }
+    
+    for _, opt := range opts {
+        opt(pw)
+    }
+    
+    return pw
+}
+
+// Parse implements the Parser interface by processing a file and extracting
+// its content and metadata. It delegates the actual parsing to the underlying
+// parser implementation while maintaining the option to preprocess files
+// using the loader capabilities.
+//
+// Returns:
+//   - Document: Contains the extracted content and metadata
+//   - error: Any error encountered during parsing
+//
+// Example:
+//
 //	doc, err := parser.Parse("document.pdf")
-func NewParser() Parser {
-	return rag.NewParserManager()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Printf("Content: %s\n", doc.Content)
+func (pw *parserWrapper) Parse(filePath string) (Document, error) {
+    return pw.parser.Parse(filePath)
+}
+
+// LoadDir implements the Loader interface by recursively processing
+// all files in a directory. It delegates to the embedded loader's
+// implementation while maintaining the parser's context.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - dir: Directory path to process
+//
+// Returns:
+//   - []string: Paths to all processed files
+//   - error: Any error encountered during directory processing
+//
+// Example:
+//
+//	paths, err := parser.LoadDir(ctx, "/path/to/docs")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	for _, path := range paths {
+//	    fmt.Printf("Processed: %s\n", path)
+//	}
+func (pw *parserWrapper) LoadDir(ctx context.Context, dir string) ([]string, error) {
+    return pw.loader.LoadDir(ctx, dir)
+}
+
+// LoadFile implements the Loader interface by processing a single file.
+// It uses the embedded loader's implementation while maintaining the
+// parser's context.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - path: Path to the file to process
+//
+// Returns:
+//   - string: Path to the processed file
+//   - error: Any error encountered during file processing
+//
+// Example:
+//
+//	processedPath, err := parser.LoadFile(ctx, "document.pdf")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Printf("Processed file at: %s\n", processedPath)
+func (pw *parserWrapper) LoadFile(ctx context.Context, path string) (string, error) {
+    return pw.loader.LoadFile(ctx, path)
+}
+
+// LoadURL implements the Loader interface by downloading and processing
+// a file from a URL. It uses the embedded loader's implementation while
+// maintaining the parser's context.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - url: URL of the file to download and process
+//
+// Returns:
+//   - string: Path to the downloaded and processed file
+//   - error: Any error encountered during download or processing
+//
+// Example:
+//
+//	processedPath, err := parser.LoadURL(ctx, "https://example.com/doc.pdf")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Printf("Downloaded and processed file at: %s\n", processedPath)
+func (pw *parserWrapper) LoadURL(ctx context.Context, url string) (string, error) {
+    return pw.loader.LoadURL(ctx, url)
 }
 
 // SetFileTypeDetector customizes how file types are detected.
