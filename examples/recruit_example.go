@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/teilomillet/goal"
+	"github.com/teilomillet/gollm"
 	"github.com/teilomillet/raggo"
 )
 
@@ -49,11 +49,11 @@ func main() {
 
 	// Initialize the LLM
 	debug("Initializing LLM...")
-	llm, err := goal.NewLLM(
-		goal.SetProvider("openai"),
-		goal.SetModel("gpt-4o-mini"),
-		goal.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
-		goal.SetMaxTokens(2048),
+	llm, err := gollm.NewLLM(
+		gollm.SetProvider("openai"),
+		gollm.SetModel("gpt-4o-mini"),
+		gollm.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
+		gollm.SetMaxTokens(2048),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create LLM: %v", err)
@@ -77,9 +77,9 @@ func main() {
 
 	debug("Initializing embedder...")
 	embedder, err := raggo.NewEmbedder(
-		raggo.SetProvider("openai"),
-		raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
-		raggo.SetModel("text-embedding-3-small"),
+		raggo.WithEmbedderProvider("openai"),
+		raggo.WithEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
+		raggo.WithEmbedderModel("text-embedding-3-small"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
@@ -212,7 +212,7 @@ func main() {
 	printCandidates(hybridCandidates)
 }
 
-func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, resumeDir string) error {
+func processResumes(llm gollm.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, resumeDir string) error {
 	fmt.Printf("Scanning directory: %s\n", resumeDir)
 	files, err := filepath.Glob(filepath.Join(resumeDir, "*.pdf"))
 	if err != nil {
@@ -252,7 +252,7 @@ func processResumes(llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, em
 	return nil
 }
 
-func processResume(file string, llm goal.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, cacheDir string) error {
+func processResume(file string, llm gollm.LLM, parser raggo.Parser, chunker raggo.Chunker, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, cacheDir string) error {
 	log.Printf("Processing resume: %s", file)
 
 	cacheFile := filepath.Join(cacheDir, filepath.Base(file)+".cache")
@@ -371,8 +371,8 @@ func deduplicateResults(results []raggo.SearchResult) []raggo.SearchResult {
 	return deduplicated
 }
 
-func createStandardizedSummary(llm goal.LLM, content string) (string, error) {
-	summarizePrompt := goal.NewPrompt(
+func createStandardizedSummary(llm gollm.LLM, content string) (string, error) {
+	summarizePrompt := gollm.NewPrompt(
 		"Summarize the given resume in the following standardized format:\n" +
 			"Personal Information: [Name, contact details]\n" +
 			"Professional Summary: [2-3 sentences summarizing key qualifications and career objectives]\n" +
@@ -392,24 +392,25 @@ func createStandardizedSummary(llm goal.LLM, content string) (string, error) {
 	return standardizedSummary, nil
 }
 
-func extractStructuredData(llm goal.LLM, standardizedSummary string) (*ResumeInfo, error) {
-	extractPrompt := goal.NewPrompt(fmt.Sprintf(`
-Extract the following information from the given resume summary:
-- Name
-- Contact Details
-- Professional Summary
-- Skills (as a list)
-- Work Experience
-- Education
-- Additional Information
+func extractStructuredData(llm gollm.LLM, standardizedSummary string) (*ResumeInfo, error) {
+	extractPrompt := gollm.NewPrompt(fmt.Sprintf(`
+	Extract the following information from the given resume summary:
+	- Name
+	- Contact Details
+	- Professional Summary
+	- Skills (as a list)
+	- Work Experience
+	- Education
+	- Additional Information
 
-Resume Summary:
-%s
+	Resume Summary:
+	%s
 
-Respond with a JSON object containing these fields.
-`, standardizedSummary))
+	Respond with a JSON object containing these fields.
+	`, standardizedSummary))
 
-	resumeInfo, err := goal.ExtractStructuredData[ResumeInfo](context.Background(), llm, extractPrompt.String())
+	resumeInfo := &ResumeInfo{}
+	_, err := llm.GenerateWithSchema(context.Background(), extractPrompt, resumeInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract structured data: %w", err)
 	}
@@ -444,12 +445,12 @@ func getCollectionItemCount(vectorDB raggo.VectorDB, collectionName string) (int
 	return 0, fmt.Errorf("getCollectionItemCount not implemented")
 }
 
-func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+func searchCandidates(ctx context.Context, llm gollm.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
 
 	fmt.Println("Starting candidate search...")
 
 	// Summarize the job offer
-	jobSummary, err := goal.Summarize(ctx, llm, jobOffer)
+	jobSummary, err := llm.Generate(ctx, llm.NewPrompt(jobOffer))
 	if err != nil {
 		return nil, fmt.Errorf("failed to summarize job offer: %w", err)
 	}
@@ -489,7 +490,7 @@ func searchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo
 	return results, nil
 }
 
-func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
+func hybridSearchCandidates(ctx context.Context, llm gollm.LLM, embeddingService *raggo.EmbeddingService, vectorDB *raggo.VectorDB, jobOffer string) ([]raggo.SearchResult, error) {
 	fmt.Println("Starting optimized hybrid search for candidates...")
 
 	// Extract different aspects of the job offer
@@ -564,8 +565,8 @@ func hybridSearchCandidates(ctx context.Context, llm goal.LLM, embeddingService 
 	return dedupedResults, nil
 }
 
-func extractJobAspects(ctx context.Context, llm goal.LLM, jobOffer string) (map[string]string, error) {
-	prompt := goal.NewPrompt(`
+func extractJobAspects(ctx context.Context, llm gollm.LLM, jobOffer string) (map[string]string, error) {
+	prompt := gollm.NewPrompt(`
 	Extract and summarize the following aspects from the job offer:
 	1. Required Skills
 	2. Experience Level

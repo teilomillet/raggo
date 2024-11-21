@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/teilomillet/goal"
+	"github.com/teilomillet/gollm"
 	"github.com/teilomillet/raggo"
 	"golang.org/x/time/rate"
 )
@@ -87,19 +87,19 @@ func main() {
 	}
 
 	embedder, err := raggo.NewEmbedder(
-		raggo.SetProvider("openai"),
-		raggo.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
-		raggo.SetModel("text-embedding-3-small"),
+		raggo.WithEmbedderProvider("openai"),
+		raggo.WithEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
+		raggo.WithEmbedderModel("text-embedding-3-small"),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
 	}
 
-	llm, err := goal.NewLLM(
-		goal.SetProvider("openai"),
-		goal.SetModel("gpt-4o-mini"),
-		goal.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
-		goal.SetMaxTokens(2048),
+	llm, err := gollm.NewLLM(
+		gollm.SetProvider("openai"),
+		gollm.SetModel("gpt-4o-mini"),
+		gollm.SetAPIKey(os.Getenv("OPENAI_API_KEY")),
+		gollm.SetMaxTokens(2048),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create LLM: %v", err)
@@ -177,7 +177,7 @@ func createMilvusCollection(milvusDB *raggo.VectorDB, collectionName string) {
 	}
 }
 
-func benchmarkPDFProcessing(parser raggo.Parser, chunker raggo.Chunker, embedder raggo.Embedder, llm goal.LLM, milvusDB *raggo.VectorDB, collectionName, targetDir string) {
+func benchmarkPDFProcessing(parser raggo.Parser, chunker raggo.Chunker, embedder raggo.Embedder, llm gollm.LLM, milvusDB *raggo.VectorDB, collectionName, targetDir string) {
 	files, err := filepath.Glob(filepath.Join(targetDir, "*.pdf"))
 	if err != nil {
 		log.Fatalf("Failed to list PDF files: %v", err)
@@ -243,7 +243,7 @@ func benchmarkPDFProcessing(parser raggo.Parser, chunker raggo.Chunker, embedder
 	fmt.Printf("Average summaries per second: %.2f\n", float64(summaryCount)/duration.Seconds())
 }
 
-func processAndEmbedPDF(parser raggo.Parser, chunker raggo.Chunker, embedder raggo.Embedder, llm goal.LLM, milvusDB *raggo.VectorDB, collectionName, filePath string) (int, int, int, error) {
+func processAndEmbedPDF(parser raggo.Parser, chunker raggo.Chunker, embedder raggo.Embedder, llm gollm.LLM, milvusDB *raggo.VectorDB, collectionName, filePath string) (int, int, int, error) {
 	log.Printf("Processing file: %s", filePath)
 
 	doc, err := parser.Parse(filePath)
@@ -260,14 +260,14 @@ func processAndEmbedPDF(parser raggo.Parser, chunker raggo.Chunker, embedder rag
 		return 0, 0, 0, fmt.Errorf("rate limit wait error: %w", err)
 	}
 
-	summaryPrompt := goal.NewPrompt(fmt.Sprintf("Summarize the following text in 2-3 sentences:\n\n%s", doc.Content))
+	summaryPrompt := gollm.NewPrompt(fmt.Sprintf("Summarize the following text in 2-3 sentences:\n\n%s", doc.Content))
 	summary, err := llm.Generate(context.Background(), summaryPrompt)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("error generating summary: %w", err)
 	}
 
 	// Update rate limiter based on response headers
-	// Note: You'll need to modify your goal.LLM interface to return these headers
+	// Note: You'll need to modify your gollm.LLM interface to return these headers
 	// gptLimiter.UpdateLimits(remainingRequests, remainingTokens, resetRequests, resetTokens)
 
 	chunks := chunker.Chunk(summary)
