@@ -387,9 +387,9 @@ func (r *Retriever) initialize() error {
 	}
 
 	r.embedder, err = NewEmbedder(
-		WithEmbedderProvider(r.config.Provider),
-		WithEmbedderModel(r.config.Model),
-		WithEmbedderAPIKey(r.config.APIKey),
+		SetEmbedderProvider(r.config.Provider),
+		SetEmbedderModel(r.config.Model),
+		SetEmbedderAPIKey(r.config.APIKey),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create embedder: %w", err)
