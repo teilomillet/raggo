@@ -32,6 +32,10 @@ type MemoryContextOptions struct {
 	// DBAddress specifies the vector database address (e.g., "./.chromem/name" or "localhost:19530")
 	DBAddress string
 
+	// UseHybrid enables hybrid search (vector + keyword matching)
+	// Note: Some vector databases like ChromaDB don't support hybrid search
+	UseHybrid bool
+
 	// IncludeScore determines whether to include relevance scores in results
 	IncludeScore bool
 
@@ -115,6 +119,20 @@ func MemoryVectorDB(dbType, address string) func(*MemoryContextOptions) {
 	}
 }
 
+// MemoryHybridSearch enables or disables hybrid search (vector + keyword matching).
+// Note that some vector databases like ChromemDB don't support hybrid search.
+//
+// Example:
+//
+//	ctx, err := raggo.NewMemoryContext(apiKey,
+//	    raggo.MemoryHybridSearch(false),  // Disable hybrid search for ChromaDB
+//	)
+func MemoryHybridSearch(enabled bool) func(*MemoryContextOptions) {
+	return func(o *MemoryContextOptions) {
+		o.UseHybrid = enabled
+	}
+}
+
 // MemoryScoreInclusion controls whether similarity scores are included in results.
 // Useful for debugging or implementing custom relevance filtering.
 //
@@ -186,8 +204,9 @@ func NewMemoryContext(apiKey string, opts ...func(*MemoryContextOptions)) (*Memo
 		TopK:         3,
 		MinScore:     0.7,
 		Collection:   "memory_store",
-		DBType:       "milvus",           // Default to Milvus
-		DBAddress:    "localhost:19530",   // Default Milvus address
+		DBType:       "milvus",          // Default to Milvus
+		DBAddress:    "localhost:19530", // Default Milvus address
+		UseHybrid:    false,
 		IncludeScore: false,
 		StoreLastN:   0,
 		StoreRAGInfo: false,
@@ -205,6 +224,7 @@ func NewMemoryContext(apiKey string, opts ...func(*MemoryContextOptions)) (*Memo
 		WithMinScore(options.MinScore),
 		WithRetrieveEmbedding("openai", "text-embedding-3-small", apiKey),
 		WithRetrieveDB(options.DBType, options.DBAddress),
+		WithHybrid(options.UseHybrid),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize retriever: %w", err)
@@ -221,7 +241,7 @@ func NewMemoryContext(apiKey string, opts ...func(*MemoryContextOptions)) (*Memo
 	if !exists {
 		// Create collection with proper schema
 		schema := Schema{
-			Name: options.Collection,
+			Name:        options.Collection,
 			Description: "Memory context collection for RAG",
 			Fields: []Field{
 				{Name: "ID", DataType: "int64", PrimaryKey: true, AutoID: true},
