@@ -61,7 +61,7 @@ type loaderWrapper struct {
 //
 // Common options include:
 //   - WithHTTPClient: Custom HTTP client configuration
-//   - SetTimeout: Operation timeout settings
+//   - SetLoaderTimeout: Operation timeout settings
 //   - SetTempDir: Temporary storage location
 type LoaderOption = rag.LoaderOption
 
@@ -86,7 +86,7 @@ func WithHTTPClient(client *http.Client) LoaderOption {
 	return rag.WithHTTPClient(client)
 }
 
-// SetTimeout sets a custom timeout for all loader operations.
+// WithLoaderTimeout sets a custom timeout for all loader operations.
 // The timeout applies to:
 //   - URL downloads
 //   - File operations
@@ -95,8 +95,8 @@ func WithHTTPClient(client *http.Client) LoaderOption {
 // Example:
 //
 //	// Set a 2-minute timeout for all operations
-//	loader := NewLoader(SetTimeout(2 * time.Minute))
-func SetTimeout(timeout time.Duration) LoaderOption {
+//	loader := NewLoader(WithLoaderTimeout(2 * time.Minute))
+func WithLoaderTimeout(timeout time.Duration) LoaderOption {
 	return rag.WithTimeout(timeout)
 }
 
@@ -127,7 +127,7 @@ func SetTempDir(dir string) LoaderOption {
 //
 //	loader := NewLoader(
 //	    WithHTTPClient(customClient),
-//	    SetTimeout(time.Minute),
+//	    WithLoaderTimeout(time.Minute),
 //	    SetTempDir("/custom/temp"),
 //	)
 func NewLoader(opts ...LoaderOption) Loader {

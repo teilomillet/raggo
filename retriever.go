@@ -26,7 +26,7 @@ type Retriever struct {
 	config   *RetrieverConfig // Configuration for retrieval operations
 	vectorDB *VectorDB        // Connection to vector database
 	embedder Embedder         // Embedding service client
-	ready    bool            // Initialization status
+	ready    bool             // Initialization status
 }
 
 // RetrieverConfig holds settings for the retrieval process. It provides
@@ -55,17 +55,17 @@ type RetrieverConfig struct {
 	Timeout      time.Duration          // Operation timeout
 	SearchParams map[string]interface{} // Additional search parameters
 	OnResult     func(SearchResult)     // Callback for each result
-	OnError      func(error)           // Error handling callback
+	OnError      func(error)            // Error handling callback
 }
 
 // RetrieverResult represents a single retrieved result with its metadata
 // and relevance information. It provides a structured way to access both
 // the content and context of each search result.
 type RetrieverResult struct {
-	Content    string                 `json:"content"`    // Retrieved text content
-	Score      float64                `json:"score"`      // Similarity score
-	Metadata   map[string]interface{} `json:"metadata"`   // Associated metadata
-	Source     string                 `json:"source"`     // Source identifier
+	Content    string                 `json:"content"`     // Retrieved text content
+	Score      float64                `json:"score"`       // Similarity score
+	Metadata   map[string]interface{} `json:"metadata"`    // Associated metadata
+	Source     string                 `json:"source"`      // Source identifier
 	ChunkIndex int                    `json:"chunk_index"` // Position in source
 }
 
@@ -387,9 +387,9 @@ func (r *Retriever) initialize() error {
 	}
 
 	r.embedder, err = NewEmbedder(
-		SetProvider(r.config.Provider),
-		SetModel(r.config.Model),
-		SetAPIKey(r.config.APIKey),
+		WithEmbedderProvider(r.config.Provider),
+		WithEmbedderModel(r.config.Model),
+		WithEmbedderAPIKey(r.config.APIKey),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create embedder: %w", err)

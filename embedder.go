@@ -39,13 +39,13 @@ type EmbeddedChunk = rag.EmbeddedChunk
 // flexible configuration API.
 //
 // Common options include:
-//   - SetProvider: Choose the embedding service provider
-//   - SetModel: Select the specific embedding model
-//   - SetAPIKey: Configure authentication
+//   - WithEmbedderProvider: Choose the embedding service provider
+//   - WithEmbedderModel: Select the specific embedding model
+//   - WithEmbedderAPIKey: Configure authentication
 //   - SetOption: Set custom provider-specific options
 type EmbedderOption = rag.EmbedderOption
 
-// SetProvider sets the provider for the Embedder.
+// WithEmbedderProvider sets the provider for the Embedder.
 // Supported providers include:
 //   - "openai": OpenAI's text-embedding-ada-002 and other models
 //   - "cohere": Cohere's embedding models
@@ -54,14 +54,14 @@ type EmbedderOption = rag.EmbedderOption
 // Example:
 //
 //	embedder, err := NewEmbedder(
-//	    SetProvider("openai"),
-//	    SetModel("text-embedding-ada-002"),
+//	    WithEmbedderProvider("openai"),
+//	    WithEmbedderModel("text-embedding-ada-002"),
 //	)
-func SetProvider(provider string) EmbedderOption {
+func WithEmbedderProvider(provider string) EmbedderOption {
 	return rag.SetProvider(provider)
 }
 
-// SetModel sets the specific model to use for embedding.
+// WithEmbedderModel sets the specific model to use for embedding.
 // Available models depend on the chosen provider:
 //   - OpenAI: "text-embedding-ada-002" (recommended)
 //   - Cohere: "embed-multilingual-v2.0"
@@ -70,14 +70,14 @@ func SetProvider(provider string) EmbedderOption {
 // Example:
 //
 //	embedder, err := NewEmbedder(
-//	    SetProvider("openai"),
-//	    SetModel("text-embedding-ada-002"),
+//	    WithEmbedderProvider("openai"),
+//	    WithEmbedderModel("text-embedding-ada-002"),
 //	)
-func SetModel(model string) EmbedderOption {
+func WithEmbedderModel(model string) EmbedderOption {
 	return rag.SetModel(model)
 }
 
-// SetAPIKey sets the authentication key for the embedding service.
+// WithEmbedderAPIKey sets the authentication key for the embedding service.
 // This is required for most cloud-based embedding providers.
 //
 // Security Note: Store API keys securely and never commit them to version control.
@@ -86,10 +86,10 @@ func SetModel(model string) EmbedderOption {
 // Example:
 //
 //	embedder, err := NewEmbedder(
-//	    SetProvider("openai"),
-//	    SetAPIKey(os.Getenv("OPENAI_API_KEY")),
+//	    WithEmbedderProvider("openai"),
+//	    WithEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
 //	)
-func SetAPIKey(apiKey string) EmbedderOption {
+func WithEmbedderAPIKey(apiKey string) EmbedderOption {
 	return rag.SetAPIKey(apiKey)
 }
 
@@ -100,7 +100,7 @@ func SetAPIKey(apiKey string) EmbedderOption {
 // Example:
 //
 //	embedder, err := NewEmbedder(
-//	    SetProvider("openai"),
+//	    WithEmbedderProvider("openai"),
 //	    SetOption("timeout", 30*time.Second),
 //	    SetOption("max_retries", 3),
 //	)
@@ -125,9 +125,9 @@ type Embedder = providers.Embedder
 // Example:
 //
 //	embedder, err := NewEmbedder(
-//	    SetProvider("openai"),
-//	    SetModel("text-embedding-ada-002"),
-//	    SetAPIKey(os.Getenv("OPENAI_API_KEY")),
+//	    WithEmbedderProvider("openai"),
+//	    WithEmbedderModel("text-embedding-ada-002"),
+//	    WithEmbedderAPIKey(os.Getenv("OPENAI_API_KEY")),
 //	)
 //	if err != nil {
 //	    log.Fatal(err)
@@ -148,7 +148,7 @@ type EmbeddingService struct {
 //
 // Example:
 //
-//	embedder, _ := NewEmbedder(SetProvider("openai"))
+//	embedder, _ := NewEmbedder(WithEmbedderProvider("openai"))
 //	service := NewEmbeddingService(embedder)
 func NewEmbeddingService(embedder Embedder) *EmbeddingService {
 	return &EmbeddingService{

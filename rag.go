@@ -24,7 +24,7 @@
 //
 //	config := raggo.DefaultRAGConfig()
 //	config.APIKey = os.Getenv("OPENAI_API_KEY")
-//	
+//
 //	rag, err := raggo.NewRAG(
 //	    raggo.SetProvider("openai"),
 //	    raggo.SetModel("text-embedding-3-small"),
@@ -33,10 +33,10 @@
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-//	
+//
 //	// Add documents
 //	err = rag.LoadDocuments(context.Background(), "path/to/docs")
-//	
+//
 //	// Query the system
 //	results, err := rag.Query(context.Background(), "your question here")
 package raggo
@@ -58,12 +58,12 @@ import (
 // enough to accommodate various use cases while maintaining sensible defaults.
 type RAGConfig struct {
 	// Database settings control how documents are stored and indexed
-	DBType      string        // Vector database type (e.g., "milvus", "memory")
-	DBAddress   string        // Database connection address
-	Collection  string        // Name of the vector collection
-	AutoCreate  bool          // Automatically create collection if it doesn't exist
-	IndexType   string        // Type of vector index (e.g., "HNSW", "IVF")
-	IndexMetric string        // Distance metric for similarity (e.g., "L2", "IP")
+	DBType      string // Vector database type (e.g., "milvus", "memory")
+	DBAddress   string // Database connection address
+	Collection  string // Name of the vector collection
+	AutoCreate  bool   // Automatically create collection if it doesn't exist
+	IndexType   string // Type of vector index (e.g., "HNSW", "IVF")
+	IndexMetric string // Distance metric for similarity (e.g., "L2", "IP")
 
 	// Processing settings determine how documents are handled
 	ChunkSize    int // Size of text chunks in tokens
@@ -71,10 +71,10 @@ type RAGConfig struct {
 	BatchSize    int // Number of documents to process in parallel
 
 	// Embedding settings configure vector generation
-	Provider  string // Embedding provider (e.g., "openai", "cohere")
-	Model     string // Embedding model name
-	LLMModel  string // Language model for text generation
-	APIKey    string // API key for the provider
+	Provider string // Embedding provider (e.g., "openai", "cohere")
+	Model    string // Embedding model name
+	LLMModel string // Language model for text generation
+	APIKey   string // API key for the provider
 
 	// Search settings control retrieval behavior
 	TopK      int     // Number of results to retrieve
@@ -82,10 +82,10 @@ type RAGConfig struct {
 	UseHybrid bool    // Whether to use hybrid search
 
 	// System settings affect operational behavior
-	Timeout  time.Duration           // Operation timeout
-	TempDir  string                 // Directory for temporary files
-	Debug    bool                   // Enable debug logging
-	
+	Timeout time.Duration // Operation timeout
+	TempDir string        // Directory for temporary files
+	Debug   bool          // Enable debug logging
+
 	// Search parameters for fine-tuning
 	SearchParams map[string]interface{} // Provider-specific search parameters
 }
@@ -107,9 +107,9 @@ type RAGOption func(*RAGConfig)
 // - Extensible through custom implementations
 // - Configurable for different use cases
 type RAG struct {
-	db       *VectorDB          // Vector database connection
-	embedder *EmbeddingService  // Service for generating embeddings
-	config   *RAGConfig         // System configuration
+	db       *VectorDB         // Vector database connection
+	embedder *EmbeddingService // Service for generating embeddings
+	config   *RAGConfig        // System configuration
 }
 
 // DefaultRAGConfig returns a default RAG configuration.
@@ -375,9 +375,9 @@ func (r *RAG) initialize() error {
 
 	// Initialize embedder
 	embedder, err := NewEmbedder(
-		SetProvider(r.config.Provider),
-		SetModel(r.config.Model),
-		SetAPIKey(r.config.APIKey),
+		WithEmbedderProvider(r.config.Provider),
+		WithEmbedderModel(r.config.Model),
+		WithEmbedderAPIKey(r.config.APIKey),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create embedder: %w", err)
@@ -400,8 +400,8 @@ func (r *RAG) initialize() error {
 func (r *RAG) LoadDocuments(ctx context.Context, source string) error {
 	loader := NewLoader(SetTempDir(r.config.TempDir))
 	chunker, err := NewChunker(
-		SetChunkSize(r.config.ChunkSize),
-		SetChunkOverlap(r.config.ChunkOverlap),
+		ChunkSize(r.config.ChunkSize),
+		ChunkOverlap(r.config.ChunkOverlap),
 	)
 	if err != nil {
 		return err
@@ -552,8 +552,8 @@ func (r *RAG) ProcessWithContext(ctx context.Context, source string, llmModel st
 
 	// Create chunks
 	chunker, _ := NewChunker(
-		SetChunkSize(r.config.ChunkSize),
-		SetChunkOverlap(r.config.ChunkOverlap),
+		ChunkSize(r.config.ChunkSize),
+		ChunkOverlap(r.config.ChunkOverlap),
 	)
 	chunks := chunker.Chunk(doc.Content)
 

@@ -41,7 +41,7 @@ type RegisterConfig struct {
 
 	// Callbacks for monitoring and error handling
 	OnProgress func(processed, total int) // Called to report progress
-	OnError    func(error)               // Called when errors occur
+	OnError    func(error)                // Called when errors occur
 }
 
 // defaultConfig returns a RegisterConfig initialized with production-ready
@@ -71,7 +71,7 @@ func defaultConfig() *RegisterConfig {
 		EmbeddingModel:    "text-embedding-3-small",
 		EmbeddingKey:      os.Getenv("OPENAI_API_KEY"),
 		OnProgress:        func(processed, total int) { Debug("Progress", "processed", processed, "total", total) },
-		OnError:          func(err error) { Error("Error during registration", "error", err) },
+		OnError:           func(err error) { Error("Error during registration", "error", err) },
 	}
 }
 
@@ -82,10 +82,10 @@ type RegisterOption func(*RegisterConfig)
 
 // Register processes documents from various sources and stores them in a vector
 // database. It handles the entire pipeline from document loading to vector storage:
-//   1. Document loading from files, directories, or URLs
-//   2. Text chunking and preprocessing
-//   3. Embedding generation
-//   4. Vector database storage
+//  1. Document loading from files, directories, or URLs
+//  2. Text chunking and preprocessing
+//  3. Embedding generation
+//  4. Vector database storage
 //
 // The process is highly configurable through RegisterOptions and supports
 // progress monitoring and error handling through callbacks.
@@ -114,7 +114,7 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	Debug("Creating loader")
 	loader := NewLoader(
 		SetTempDir(cfg.TempDir),
-		SetTimeout(cfg.Timeout),
+		WithLoaderTimeout(cfg.Timeout),
 	)
 
 	// Create chunker
@@ -130,9 +130,9 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 	// Create embedder
 	Debug("Creating embedder")
 	embedder, err := NewEmbedder(
-		SetProvider(cfg.EmbeddingProvider),
-		SetModel(cfg.EmbeddingModel),
-		SetAPIKey(cfg.EmbeddingKey),
+		WithEmbedderProvider(cfg.EmbeddingProvider),
+		WithEmbedderModel(cfg.EmbeddingModel),
+		WithEmbedderAPIKey(cfg.EmbeddingKey),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create embedder: %w", err)
@@ -289,13 +289,13 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 				cfg.OnError(fmt.Errorf("missing or empty embedding for chunk %d in %s", j, path))
 				continue
 			}
-			
+
 			// Convert []float64 to []float32 for ChromemDB
 			embedding32 := make([]float32, len(embedding))
 			for i, v := range embedding {
 				embedding32[i] = float32(v)
 			}
-			
+
 			records[j] = Record{
 				Fields: map[string]interface{}{
 					"Embedding": embedding32,
