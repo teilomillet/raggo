@@ -14,6 +14,7 @@ package raggo
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 )
@@ -121,6 +122,7 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RetrieverResu
 		return nil, fmt.Errorf("retriever not properly initialized")
 	}
 
+	// Try a search with topK=1 first to check if collection has any documents
 	queryEmbedding, err := r.embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create query embedding: %w", err)
@@ -129,9 +131,38 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RetrieverResu
 	r.vectorDB.SetColumnNames(r.config.Columns)
 	vectors := map[string]Vector{"Embedding": queryEmbedding}
 
-	var searchResults []SearchResult
+	// Try to get one result to check if collection has documents
+	var initialResults []SearchResult
 	var searchErr error
+	if r.config.UseHybrid {
+		initialResults, searchErr = r.vectorDB.HybridSearch(
+			ctx,
+			r.config.Collection,
+			vectors,
+			1,
+			r.config.MetricType,
+			r.config.SearchParams,
+			nil,
+		)
+	} else {
+		initialResults, searchErr = r.vectorDB.Search(
+			ctx,
+			r.config.Collection,
+			vectors,
+			1,
+			r.config.MetricType,
+			r.config.SearchParams,
+		)
+	}
 
+	// If we get a "no results" error or empty results, collection is empty
+	if searchErr != nil || len(initialResults) == 0 {
+		log.Printf("Warning: Collection '%s' appears to be empty, returning no results", r.config.Collection)
+		return []RetrieverResult{}, nil
+	}
+
+	// Now try with requested topK
+	var searchResults []SearchResult
 	if r.config.UseHybrid {
 		searchResults, searchErr = r.vectorDB.HybridSearch(
 			ctx,
@@ -153,8 +184,13 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RetrieverResu
 		)
 	}
 
+	// If we get an error but we know there are documents, the TopK might be too high
 	if searchErr != nil {
-		return nil, fmt.Errorf("search failed: %w", searchErr)
+		log.Printf("Warning: Failed to retrieve %d results, trying with %d results (collection might have fewer documents)", 
+			r.config.TopK, len(initialResults))
+		
+		// Fall back to what we know works
+		searchResults = initialResults
 	}
 
 	results := make([]RetrieverResult, 0, len(searchResults))
@@ -182,6 +218,10 @@ func (r *Retriever) Retrieve(ctx context.Context, query string) ([]RetrieverResu
 		}
 
 		results = append(results, match)
+	}
+
+	if len(results) < r.config.TopK {
+		log.Printf("Info: Returned %d results (fewer than requested TopK=%d)", len(results), r.config.TopK)
 	}
 
 	return results, nil
