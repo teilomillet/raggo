@@ -26,6 +26,12 @@ type MemoryContextOptions struct {
 	// Collection specifies the vector database collection for storing memories
 	Collection string
 
+	// DBType specifies the vector database type (e.g., "chromem", "milvus")
+	DBType string
+
+	// DBAddress specifies the vector database address (e.g., "./.chromem/name" or "localhost:19530")
+	DBAddress string
+
 	// IncludeScore determines whether to include relevance scores in results
 	IncludeScore bool
 
@@ -91,6 +97,21 @@ func MemoryMinScore(score float64) func(*MemoryContextOptions) {
 func MemoryCollection(collection string) func(*MemoryContextOptions) {
 	return func(o *MemoryContextOptions) {
 		o.Collection = collection
+	}
+}
+
+// MemoryVectorDB configures the vector database type and address.
+// This allows choosing between different vector store implementations and their locations.
+//
+// Example:
+//
+//	ctx, err := raggo.NewMemoryContext(apiKey,
+//	    raggo.MemoryVectorDB("chromem", "./.chromem/chat"),  // Use Chromem store
+//	)
+func MemoryVectorDB(dbType, address string) func(*MemoryContextOptions) {
+	return func(o *MemoryContextOptions) {
+		o.DBType = dbType
+		o.DBAddress = address
 	}
 }
 
@@ -165,6 +186,8 @@ func NewMemoryContext(apiKey string, opts ...func(*MemoryContextOptions)) (*Memo
 		TopK:         3,
 		MinScore:     0.7,
 		Collection:   "memory_store",
+		DBType:       "milvus",           // Default to Milvus
+		DBAddress:    "localhost:19530",   // Default Milvus address
 		IncludeScore: false,
 		StoreLastN:   0,
 		StoreRAGInfo: false,
@@ -181,7 +204,7 @@ func NewMemoryContext(apiKey string, opts ...func(*MemoryContextOptions)) (*Memo
 		WithTopK(options.TopK),
 		WithMinScore(options.MinScore),
 		WithRetrieveEmbedding("openai", "text-embedding-3-small", apiKey),
-		WithRetrieveDB("milvus", "localhost:19530"), // Add default DB config
+		WithRetrieveDB(options.DBType, options.DBAddress),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize retriever: %w", err)
