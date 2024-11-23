@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/teilomillet/gollm"
+	"github.com/teilomillet/raggo/rag"
 )
 
 // MemoryContextOptions configures the behavior of the contextual memory system.
@@ -296,8 +297,21 @@ func (m *MemoryContext) shouldStore(memory []gollm.MemoryMessage) bool {
 		timeSinceLastStore > 5*time.Minute
 }
 
-// StoreMemory explicitly stores messages in the memory context.
-// It processes and indexes the messages for later retrieval.
+// StoreMemory stores and indexes conversation messages in the memory context using ChromeDB.
+// It processes the messages by:
+// 1. Converting messages into a formatted text string
+// 2. Generating embeddings using the configured embedder
+// 3. Creating a ChromeDB document with Text, Embedding, and Metadata fields
+// 4. Storing the document in the specified collection
+//
+// The stored document structure:
+//   - Text: Formatted conversation text
+//   - Embedding: Vector representation of the text
+//   - Metadata:
+//     - timestamp: Time of storage
+//     - collection: Collection name
+//     - type: Document type ("memory")
+//     - roles: Comma-separated list of conversation roles
 //
 // Example:
 //
@@ -310,19 +324,55 @@ func (m *MemoryContext) StoreMemory(ctx context.Context, messages []gollm.Memory
 		return nil
 	}
 
+	// Get the vector DB from the retriever
+	vectorDB := m.retriever.GetVectorDB()
+	if vectorDB == nil {
+		return fmt.Errorf("vector database not initialized")
+	}
+
+	// Format memory content
 	var memoryContent string
 	for _, msg := range messages {
 		memoryContent += fmt.Sprintf("%s: %s\n", msg.Role, msg.Content)
 	}
 
-	// TODO: Implement document storage through the vector store
-	// For now, we'll just store the content through the retriever
-	_, err := m.retriever.Retrieve(ctx, memoryContent)
+	// Generate embeddings using the retriever's Embed method
+	queryEmbedding, err := m.retriever.embedder.Embed(ctx, memoryContent)
 	if err != nil {
-		return fmt.Errorf("failed to store memory: %w", err)
+		return fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
+	// Create record with fields matching ChromeDB's expected structure
+	record := rag.Record{
+		Fields: map[string]interface{}{
+			"Text":      memoryContent,
+			"Embedding": queryEmbedding,
+			"Metadata": map[string]interface{}{
+				"timestamp":   time.Now().Format(time.RFC3339),
+				"collection": m.options.Collection,
+				"type":       "memory",
+				"roles":      extractRoles(messages),
+			},
+		},
+	}
+
+	// Store the record in the vector database
+	if err := vectorDB.Insert(ctx, m.options.Collection, []rag.Record{record}); err != nil {
+		return fmt.Errorf("failed to store document: %w", err)
+	}
+
+	m.lastStoreTime = time.Now()
+	m.lastMemoryLen = len(messages)
 	return nil
+}
+
+// extractRoles returns a comma-separated string of roles from memory messages
+func extractRoles(messages []gollm.MemoryMessage) string {
+	roles := make([]string, len(messages))
+	for i, msg := range messages {
+		roles[i] = msg.Role
+	}
+	return strings.Join(roles, ",")
 }
 
 // StoreLastN stores only the most recent N messages from the memory.
