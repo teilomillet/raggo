@@ -154,16 +154,44 @@ func NewSimpleRAG(config SimpleRAGConfig) (*SimpleRAG, error) {
 		return nil, fmt.Errorf("failed to connect to vector database: %w", err)
 	}
 
-	// Check and drop existing collection
+	// Check if collection exists
 	exists, err := vectorDB.HasCollection(ctx, config.Collection)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check collection: %w", err)
 	}
-	if exists {
-		log.Println("Dropping existing collection")
-		err = vectorDB.DropCollection(ctx, config.Collection)
+	if !exists {
+		log.Println("Creating new collection")
+		// Create collection with schema
+		schema := Schema{
+			Name: config.Collection,
+			Fields: []Field{
+				{Name: "ID", DataType: "int64", PrimaryKey: true, AutoID: true},
+				{Name: "Embedding", DataType: "float_vector", Dimension: config.Dimension},
+				{Name: "Text", DataType: "varchar", MaxLength: 65535},
+				{Name: "Metadata", DataType: "varchar", MaxLength: 65535},
+			},
+		}
+		if err := vectorDB.CreateCollection(ctx, config.Collection, schema); err != nil {
+			return nil, fmt.Errorf("failed to create collection: %w", err)
+		}
+
+		// Create index for vector field
+		err = vectorDB.CreateIndex(ctx, config.Collection, "Embedding", Index{
+			Type:   "HNSW",
+			Metric: "L2",
+			Parameters: map[string]interface{}{
+				"M":              16,
+				"efConstruction": 256,
+			},
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to drop collection: %w", err)
+			return nil, fmt.Errorf("failed to create index: %w", err)
+		}
+
+		// Load the collection
+		err = vectorDB.LoadCollection(ctx, config.Collection)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load collection: %w", err)
 		}
 	}
 
@@ -259,25 +287,6 @@ func (s *SimpleRAG) AddDocuments(ctx context.Context, source string) error {
 		if err != nil {
 			return fmt.Errorf("failed to add document: %w", err)
 		}
-	}
-
-	// Create and load index only once after all documents are processed
-	err = s.vectorDB.CreateIndex(ctx, s.collection, "Embedding", Index{
-		Type:   "HNSW",
-		Metric: "L2",
-		Parameters: map[string]interface{}{
-			"M":              16,
-			"efConstruction": 256,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create index: %w", err)
-	}
-
-	// Load the collection
-	err = s.vectorDB.LoadCollection(ctx, s.collection)
-	if err != nil {
-		return fmt.Errorf("failed to load collection: %w", err)
 	}
 
 	log.Printf("Successfully added documents from: %s", source)

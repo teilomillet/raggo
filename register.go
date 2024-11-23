@@ -199,15 +199,14 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 
 			// Create index for vector field
 			Debug("Creating index")
-			index := Index{
+			if err := vectorDB.CreateIndex(ctx, cfg.CollectionName, "Embedding", Index{
 				Type:   "HNSW",
 				Metric: "L2",
 				Parameters: map[string]interface{}{
 					"M":              16,
 					"efConstruction": 256,
 				},
-			}
-			if err := vectorDB.CreateIndex(ctx, cfg.CollectionName, "Embedding", index); err != nil {
+			}); err != nil {
 				return fmt.Errorf("failed to create index: %w", err)
 			}
 
@@ -215,6 +214,12 @@ func Register(ctx context.Context, source string, opts ...RegisterOption) error 
 			Debug("Loading collection")
 			if err := vectorDB.LoadCollection(ctx, cfg.CollectionName); err != nil {
 				return fmt.Errorf("failed to load collection: %w", err)
+			}
+		} else {
+			// Collection exists, ensure it's loaded
+			Debug("Collection exists, ensuring it's loaded")
+			if err := vectorDB.LoadCollection(ctx, cfg.CollectionName); err != nil {
+				return fmt.Errorf("failed to load existing collection: %w", err)
 			}
 		}
 	}
