@@ -430,6 +430,10 @@ func (m *MemoryContext) EnhancePrompt(ctx context.Context, prompt *gollm.Prompt,
 
 // retrieveContext retrieves relevant context from stored memories.
 // It uses vector similarity search to find the most relevant past interactions.
+// The function handles different message formats:
+// - Plain content
+// - Role-prefixed content (e.g., "system: ...", "user: ...")
+// - Metadata-enriched content
 func (m *MemoryContext) retrieveContext(ctx context.Context, input string) ([]string, error) {
 	results, err := m.retriever.Retrieve(ctx, input)
 	if err != nil {
@@ -438,12 +442,35 @@ func (m *MemoryContext) retrieveContext(ctx context.Context, input string) ([]st
 
 	var relevantContext []string
 	for _, result := range results {
-		if result.Content != "" {
-			if m.options.IncludeScore {
-				relevantContext = append(relevantContext, fmt.Sprintf("[Score: %.2f] %s", result.Score, result.Content))
-			} else {
-				relevantContext = append(relevantContext, result.Content)
+		if result.Content == "" {
+			continue
+		}
+
+		// Parse the content to handle role prefixes
+		content := result.Content
+		if strings.Contains(content, ":") {
+			parts := strings.SplitN(content, ":", 2)
+			if len(parts) == 2 {
+				role := strings.TrimSpace(parts[0])
+				content = strings.TrimSpace(parts[1])
+				
+				// Skip empty content after parsing
+				if content == "" {
+					continue
+				}
+
+				// Format the content with role if it's not a system message
+				if role != "system" {
+					content = fmt.Sprintf("%s: %s", role, content)
+				}
 			}
+		}
+
+		// Add score if enabled
+		if m.options.IncludeScore {
+			relevantContext = append(relevantContext, fmt.Sprintf("[Score: %.2f] %s", result.Score, content))
+		} else {
+			relevantContext = append(relevantContext, content)
 		}
 	}
 
